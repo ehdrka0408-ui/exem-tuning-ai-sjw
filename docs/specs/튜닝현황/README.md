@@ -32,15 +32,7 @@
 | `spec-frontend-improvement-calc.md` | 개선률 계산 로직 | totals/per-exec · useTotals · 방향 · 0-coercion |
 | `spec-frontend-retune-tree.md` | 재튜닝 트리 UX | 그룹핑 · 정렬 · 시각 구분 · 체크 전파 · 삭제 |
 
-### 1.3 종합 화면 기획
-
-| 파일 | 내용 |
-|------|------|
-| `튜닝현황_화면기획명세서_v1.md` | 캡처 10장 + 섹션별 화면 설명 |
-| `튜닝현황_기능명세_v1.html` | 단일 HTML 통합 (인쇄/공유용) |
-| `화면캡처/` | PNG 캡처 10장 (1920×1080) |
-
-### 1.4 릴리즈 가이드 (배포 단위)
+### 1.3 릴리즈 가이드 (배포 단위)
 
 | 파일 | 용도 |
 |------|------|
@@ -64,10 +56,9 @@
 5. `spec-backend-api.md` — API 응답 구조 (의존)
 
 **운영자 · 튜너 (기능 사용 관점)**
-1. `튜닝현황_화면기획명세서_v1.md` — 캡처 기반 설명
-2. `spec-work-list.md` — 목록 사용법
-3. `spec-work-detail-review.md` — 상세 검토
-4. `spec-work-detail-history.md` — 이력 확인 (구현 예정)
+1. `spec-work-list.md` — 목록 사용법 (그룹 뷰 / 리스트 뷰)
+2. `spec-work-detail-review.md` — 상세 검토
+3. `spec-work-detail-history.md` — 이력 확인 (구현 예정)
 
 ---
 
@@ -249,7 +240,7 @@
 3. 전문 용어 추가 시 §4 용어집에 1행 정의 추가
 4. 큰 구조 변경은 파일 버전 증분 (`_v2.md`) · 기존 `_v1.md` 유지
 5. 코드 경로·서버 IP·계정은 본 README 의 §3, §6 섹션에 갱신
-6. 화면 UI 가 바뀌면 `화면캡처/` 폴더의 해당 PNG 를 재촬영해 대체
+6. 화면 UI 가 바뀌면 본문 spec 의 텍스트 설명을 직접 갱신 (캡처 PNG 폴더는 폐기됨 — 사용자 PC 의 별도 산출물로 보관)
 
 ---
 
