@@ -1,0 +1,489 @@
+const BASE = import.meta.env.VITE_API_BASE || 'http://10.10.45.119:8000'
+
+export interface TuningCaseSummary {
+  id: number
+  title: string | null
+  category: string | null
+  sql_id: string | null
+  schema_name: string | null
+  instance_name: string | null
+  status: string
+  owner: string
+  source: string
+  created_at: string
+}
+
+export interface PlanRow {
+  id: number
+  phase: string
+  plan_hash: string | null
+  plan_text: string
+  cost: number | null
+  elapsed_ms: number | null
+  buffers: number | null
+  note: string | null
+}
+
+export interface BindVariable {
+  id: number
+  name: string
+  data_type: string
+  value: string | null
+  position: number | null
+}
+
+export interface TuningCaseDetail extends TuningCaseSummary {
+  sql_text: string
+  tuned_sql_text: string | null
+  rationale: string | null
+  plans: PlanRow[]
+  bind_variables: BindVariable[]
+}
+
+export async function fetchCases(): Promise<TuningCaseSummary[]> {
+  const r = await fetch(`${BASE}/api/cases`)
+  if (!r.ok) throw new Error(`fetchCases failed: ${r.status}`)
+  return r.json()
+}
+
+export async function fetchCase(id: number): Promise<TuningCaseDetail> {
+  const r = await fetch(`${BASE}/api/cases/${id}`)
+  if (!r.ok) throw new Error(`fetchCase failed: ${r.status}`)
+  return r.json()
+}
+
+// ===== Tuning Pipeline (4-stage) =====
+
+export interface TuningBindVar {
+  name: string
+  value: unknown
+  data_type: string
+  position?: number
+}
+
+export interface BeforePerformance {
+  elapsed_time_sec: number | null
+  cpu_time_sec: number | null
+  buffer_gets_count: number | null
+  disk_reads_count: number | null
+  executions_count: number | null
+  rows_processed_count: number | null
+}
+
+export interface TuningRequestPayload {
+  sql_text: string
+  schema_name?: string
+  instance_id: number
+  binds?: TuningBindVar[]
+  user_instruction?: string
+  source?: 'ui' | 'api'
+  requested_by?: string
+  auto_tune?: boolean
+  complex_case?: boolean
+  parent_request_id?: string | null
+}
+
+export interface TuningRequestResponse {
+  request_id: number
+  status: string
+  asis_sql_id: string
+  before_performance: BeforePerformance | null
+  before_plan: string | null
+  message: string | null
+  tuning_outcome: Record<string, unknown> | null
+}
+
+export interface TuningRequestPerfRow extends BeforePerformance {
+  phase: 'before' | 'after' | 'applied'
+  captured_at?: string | null
+}
+export interface TuningRequestPlanRow {
+  phase: 'before' | 'after' | 'applied'
+  plan_text: string
+  captured_at?: string | null
+}
+export interface TuningRequestDetail extends TuningRequestResponse {
+  tobe_sql_id?: string | null
+  source_sql_text?: string | null
+  tuned_sql_text?: string | null
+  rationale?: string | null
+  llm_provider?: string | null
+  llm_model?: string | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+  latency_ms?: number | null
+  requested_at?: string | null
+  completed_at?: string | null
+  performance?: TuningRequestPerfRow[]
+  plans?: TuningRequestPlanRow[]
+  // Phase 2 호환: 단순 접근용 별칭 (필요 시 calling 측에서 채움)
+  after_performance?: BeforePerformance | null
+  after_plan?: string | null
+  applied_performance?: BeforePerformance | null
+  applied_plan?: string | null
+  attempts?: number | null
+  improvement_pct?: number | null
+}
+
+async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
+  if (!r.ok) {
+    const text = await r.text().catch(() => '')
+    throw new Error(`${label} failed: ${r.status} ${text}`)
+  }
+  return r.json() as Promise<T>
+}
+
+export interface TuningRequestSummary {
+  id: string
+  request_id: number
+  status: string
+  source: string | null
+  asis_sql_id: string | null
+  tobe_sql_id: string | null
+  parent_request_id: number | null
+  instance_id: number | null
+  source_sql_text_preview: string | null
+  source_sql_text?: string | null
+  schema_name: string | null
+  instance_name: string | null
+  requested_at: string | null
+  completed_at: string | null
+  llm_provider: string | null
+  llm_model: string | null
+  improvement_pct: number | null
+  is_no_improve: boolean
+  is_wall_clock_fallback: boolean
+  rationale?: string | null
+  before_elapsed_sec?: number | null
+  after_elapsed_sec?: number | null
+  before_buffer_gets?: number | null
+  after_buffer_gets?: number | null
+  asis_sql_id_hash: string | null
+  tobe_sql_id_hash: string | null
+  requested_by: string | null
+  before_elapsed_sec: number | null
+  after_elapsed_sec: number | null
+  before_buffer_gets: number | null
+  after_buffer_gets: number | null
+}
+
+export interface ListTuningRequestsParams {
+  status?: string | string[]
+  source?: string
+  schema_name?: string
+  instance_id?: string
+  from_date?: string
+  to_date?: string
+  limit?: number
+  offset?: number
+}
+
+export interface TuningRequestDetailPerf {
+  phase: string
+  elapsed_time_sec?: number | null
+  cpu_time_sec?: number | null
+  buffer_gets_count?: number | null
+  disk_reads_count?: number | null
+  executions_count?: number | null
+  rows_processed_count?: number | null
+  captured_at?: string | null
+}
+export interface TuningRequestDetailPlan {
+  phase: string
+  plan_text: string | null
+  captured_at?: string | null
+}
+export interface TuningRequestDetail {
+  id: string
+  request_id: number
+  asis_sql_id: string | null
+  tobe_sql_id: string | null
+  status: string
+  rationale: string | null
+  llm_provider: string | null
+  llm_model: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  latency_ms: number | null
+  requested_at: string | null
+  completed_at: string | null
+  source_sql_text: string | null
+  tuned_sql_text: string | null
+  performance: TuningRequestDetailPerf[]
+  plans: TuningRequestDetailPlan[]
+}
+export async function fetchTuningRequestDetail(id: number | string): Promise<TuningRequestDetail> {
+  const r = await fetch(`${BASE}/api/tuning/requests/${encodeURIComponent(String(id))}`)
+  return jsonOrThrow<TuningRequestDetail>(r, 'fetchTuningRequestDetail')
+}
+
+
+export async function fetchTuningRequests(params: ListTuningRequestsParams = {}): Promise<TuningRequestSummary[]> {
+  const qs = new URLSearchParams()
+  const append = (k: string, v: unknown) => {
+    if (v === undefined || v === null || v === '') return
+    if (Array.isArray(v)) v.forEach(x => qs.append(k, String(x)))
+    else qs.append(k, String(v))
+  }
+  append('status', params.status)
+  append('source', params.source)
+  append('schema_name', params.schema_name)
+  append('instance_id', params.instance_id)
+  append('from_date', params.from_date)
+  append('to_date', params.to_date)
+  append('limit', params.limit)
+  append('offset', params.offset)
+  const r = await fetch(`${BASE}/api/tuning/requests?${qs.toString()}`)
+  return jsonOrThrow<TuningRequestSummary[]>(r, 'fetchTuningRequests')
+}
+
+// 튜닝 요청 일괄 삭제 (DB 에서 실제 삭제) — 선택된 id 배열과 descendant 를 함께 삭제
+export interface BulkDeleteTuningResponse {
+  deleted_request_ids: string[]
+  deleted_sql_plans: number
+  deleted_sql_performance: number
+}
+
+export async function deleteTuningRequests(ids: string[]): Promise<BulkDeleteTuningResponse> {
+  const r = await fetch(`${BASE}/api/tuning/requests/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+  return jsonOrThrow<BulkDeleteTuningResponse>(r, 'deleteTuningRequests')
+}
+
+// [1] 튜닝 요청 등록 + before 캡처
+export async function requestTuning(payload: TuningRequestPayload): Promise<TuningRequestResponse> {
+  const r = await fetch(`${BASE}/api/tuning/requests`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<TuningRequestResponse>(r, 'requestTuning')
+}
+
+// 단건 조회 (LLM 잡 진행 폴링용)
+export async function fetchTuningRequest(id: number | string): Promise<TuningRequestDetail> {
+  const r = await fetch(`${BASE}/api/tuning/requests/${encodeURIComponent(String(id))}`)
+  return jsonOrThrow<TuningRequestDetail>(r, 'fetchTuningRequest')
+}
+
+// [3] 검토/승인
+export async function approveTuning(id: number | string): Promise<TuningRequestDetail> {
+  const r = await fetch(`${BASE}/api/tuning/requests/${encodeURIComponent(String(id))}/approve`, { method: 'PATCH' })
+  return jsonOrThrow<TuningRequestDetail>(r, 'approveTuning')
+}
+
+// 반려
+export async function rejectTuning(id: number | string, reason: string): Promise<TuningRequestDetail> {
+  const r = await fetch(`${BASE}/api/tuning/requests/${encodeURIComponent(String(id))}/reject`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  return jsonOrThrow<TuningRequestDetail>(r, 'rejectTuning')
+}
+
+// [4] 적용 후 측정
+export async function applyTuning(id: number | string): Promise<TuningRequestDetail> {
+  const r = await fetch(`${BASE}/api/tuning/requests/${encodeURIComponent(String(id))}/apply`, { method: 'POST' })
+  return jsonOrThrow<TuningRequestDetail>(r, 'applyTuning')
+}
+
+
+// ===== Instances CRUD (db_instances) =====
+
+export interface InstanceMeta {
+  id: string
+  name: string
+  alias: string | null
+  host: string
+  port: number
+  sid: string
+  db_user: string
+  db_password: string  // GET 시 마스킹("****"), reveal_password=true 면 원문
+  schema_name: string | null
+  db_type: string  // 'Oracle' 등
+  instance_type: 'production' | 'staging' | 'development' | null
+  status: string  // 'active' | 'inactive' 등
+}
+
+export interface InstancePayload {
+  id?: string  // POST 시 옵션 (서버 자동 생성 가능)
+  name: string
+  alias?: string | null
+  host: string
+  port: number
+  sid: string
+  db_user: string
+  db_password: string
+  schema_name?: string | null
+  db_type?: string
+  instance_type?: 'production' | 'staging' | 'development' | null
+  status?: string
+}
+
+export async function fetchInstances(reveal = false): Promise<InstanceMeta[]> {
+  const qs = reveal ? '?reveal_password=true' : ''
+  const r = await fetch(`${BASE}/api/instances${qs}`)
+  return jsonOrThrow<InstanceMeta[]>(r, 'fetchInstances')
+}
+
+export async function createInstance(payload: InstancePayload): Promise<InstanceMeta> {
+  const r = await fetch(`${BASE}/api/instances`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<InstanceMeta>(r, 'createInstance')
+}
+
+export async function updateInstance(id: string, payload: Partial<InstancePayload>): Promise<InstanceMeta> {
+  const r = await fetch(`${BASE}/api/instances/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<InstanceMeta>(r, 'updateInstance')
+}
+
+export async function deleteInstance(id: string): Promise<{ deleted: string }> {
+  const r = await fetch(`${BASE}/api/instances/${id}`, { method: 'DELETE' })
+  return jsonOrThrow<{ deleted: string }>(r, 'deleteInstance')
+}
+
+export interface TestInstanceResponse {
+  ok: boolean
+  message: string
+}
+export async function testInstance(id: string): Promise<TestInstanceResponse> {
+  const r = await fetch(`${BASE}/api/instances/${id}/test`, { method: 'POST' })
+  return jsonOrThrow<TestInstanceResponse>(r, 'testInstance')
+}
+
+
+// ===== Users + UserGroups CRUD =====
+
+export interface UserMeta {
+  id: string
+  name: string
+  email: string | null
+  role: string | null
+  last_login: string | null
+  group_id: string | null
+  permissions: string[]
+  created_at: string | null
+}
+
+export interface UserPayload {
+  id?: string
+  name: string
+  email?: string | null
+  role?: string | null
+  group_id?: string | null
+  permissions?: string[]
+}
+
+export async function fetchUsers(): Promise<UserMeta[]> {
+  const r = await fetch(`${BASE}/api/users`)
+  return jsonOrThrow<UserMeta[]>(r, 'fetchUsers')
+}
+export async function createUser(payload: UserPayload): Promise<UserMeta> {
+  const r = await fetch(`${BASE}/api/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<UserMeta>(r, 'createUser')
+}
+export async function updateUser(id: string, payload: Partial<UserPayload>): Promise<UserMeta> {
+  const r = await fetch(`${BASE}/api/users/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<UserMeta>(r, 'updateUser')
+}
+export async function deleteUser(id: string): Promise<{ deleted: string }> {
+  const r = await fetch(`${BASE}/api/users/${id}`, { method: 'DELETE' })
+  return jsonOrThrow<{ deleted: string }>(r, 'deleteUser')
+}
+
+export interface UserGroupMeta {
+  id: string
+  name: string
+  description: string | null
+  members: number
+  created_at: string | null
+}
+export interface UserGroupPayload {
+  id?: string
+  name: string
+  description?: string | null
+}
+export async function fetchUserGroups(): Promise<UserGroupMeta[]> {
+  const r = await fetch(`${BASE}/api/user-groups`)
+  return jsonOrThrow<UserGroupMeta[]>(r, 'fetchUserGroups')
+}
+export async function createUserGroup(payload: UserGroupPayload): Promise<UserGroupMeta> {
+  const r = await fetch(`${BASE}/api/user-groups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<UserGroupMeta>(r, 'createUserGroup')
+}
+export async function updateUserGroup(id: string, payload: Partial<UserGroupPayload>): Promise<UserGroupMeta> {
+  const r = await fetch(`${BASE}/api/user-groups/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<UserGroupMeta>(r, 'updateUserGroup')
+}
+export async function deleteUserGroup(id: string): Promise<{ deleted: string }> {
+  const r = await fetch(`${BASE}/api/user-groups/${id}`, { method: 'DELETE' })
+  return jsonOrThrow<{ deleted: string }>(r, 'deleteUserGroup')
+}
+
+
+// ===== Exception SQLs CRUD =====
+
+export interface ExceptionSql {
+  id: string
+  sql_id: string
+  sqlId: string
+  sql_text: string
+  sqlText: string
+  reason: string | null
+  alias?: string | null
+  registered_by: string | null
+  addedBy: string | null
+  registered_at: string | null
+  addedAt: string | null
+}
+export interface ExceptionSqlPayload {
+  id?: string
+  sql_id: string
+  sql_text: string
+  reason?: string | null
+  alias?: string | null
+  registered_by?: string | null
+}
+export async function fetchExceptionSqls(): Promise<ExceptionSql[]> {
+  const r = await fetch(`${BASE}/api/exception-sqls`)
+  return jsonOrThrow<ExceptionSql[]>(r, 'fetchExceptionSqls')
+}
+export async function createExceptionSql(payload: ExceptionSqlPayload): Promise<ExceptionSql> {
+  const r = await fetch(`${BASE}/api/exception-sqls`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return jsonOrThrow<ExceptionSql>(r, 'createExceptionSql')
+}
+export async function deleteExceptionSql(id: string): Promise<{ deleted: string }> {
+  const r = await fetch(`${BASE}/api/exception-sqls/${id}`, { method: 'DELETE' })
+  return jsonOrThrow<{ deleted: string }>(r, 'deleteExceptionSql')
+}

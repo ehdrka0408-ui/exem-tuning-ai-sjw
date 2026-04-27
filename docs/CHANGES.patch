@@ -1,0 +1,3448 @@
+diff --git a/backend/alembic.ini b/backend/alembic.ini
+new file mode 100644
+index 0000000..0e50bdb
+--- /dev/null
++++ b/backend/alembic.ini
+@@ -0,0 +1,117 @@
++# A generic, single database configuration.
++
++[alembic]
++# path to migration scripts
++# Use forward slashes (/) also on windows to provide an os agnostic path
++script_location = alembic
++
++# template used to generate migration file names; The default value is %%(rev)s_%%(slug)s
++# Uncomment the line below if you want the files to be prepended with date and time
++# see https://alembic.sqlalchemy.org/en/latest/tutorial.html#editing-the-ini-file
++# for all available tokens
++# file_template = %%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s
++
++# sys.path path, will be prepended to sys.path if present.
++# defaults to the current working directory.
++prepend_sys_path = .
++
++# timezone to use when rendering the date within the migration file
++# as well as the filename.
++# If specified, requires the python>=3.9 or backports.zoneinfo library.
++# Any required deps can installed by adding `alembic[tz]` to the pip requirements
++# string value is passed to ZoneInfo()
++# leave blank for localtime
++# timezone =
++
++# max length of characters to apply to the "slug" field
++# truncate_slug_length = 40
++
++# set to 'true' to run the environment during
++# the 'revision' command, regardless of autogenerate
++# revision_environment = false
++
++# set to 'true' to allow .pyc and .pyo files without
++# a source .py file to be detected as revisions in the
++# versions/ directory
++# sourceless = false
++
++# version location specification; This defaults
++# to alembic/versions.  When using multiple version
++# directories, initial revisions must be specified with --version-path.
++# The path separator used here should be the separator specified by "version_path_separator" below.
++# version_locations = %(here)s/bar:%(here)s/bat:alembic/versions
++
++# version path separator; As mentioned above, this is the character used to split
++# version_locations. The default within new alembic.ini files is "os", which uses os.pathsep.
++# If this key is omitted entirely, it falls back to the legacy behavior of splitting on spaces and/or commas.
++# Valid values for version_path_separator are:
++#
++# version_path_separator = :
++# version_path_separator = ;
++# version_path_separator = space
++# version_path_separator = newline
++version_path_separator = os  # Use os.pathsep. Default configuration used for new projects.
++
++# set to 'true' to search source files recursively
++# in each "version_locations" directory
++# new in Alembic version 1.10
++# recursive_version_locations = false
++
++# the output encoding used when revision files
++# are written from script.py.mako
++# output_encoding = utf-8
++
++sqlalchemy.url = driver://user:pass@localhost/dbname
++
++
++[post_write_hooks]
++# post_write_hooks defines scripts or Python functions that are run
++# on newly generated revision scripts.  See the documentation for further
++# detail and examples
++
++# format using "black" - use the console_scripts runner, against the "black" entrypoint
++# hooks = black
++# black.type = console_scripts
++# black.entrypoint = black
++# black.options = -l 79 REVISION_SCRIPT_FILENAME
++
++# lint with attempts to fix using "ruff" - use the exec runner, execute a binary
++# hooks = ruff
++# ruff.type = exec
++# ruff.executable = %(here)s/.venv/bin/ruff
++# ruff.options = --fix REVISION_SCRIPT_FILENAME
++
++# Logging configuration
++[loggers]
++keys = root,sqlalchemy,alembic
++
++[handlers]
++keys = console
++
++[formatters]
++keys = generic
++
++[logger_root]
++level = WARNING
++handlers = console
++qualname =
++
++[logger_sqlalchemy]
++level = WARNING
++handlers =
++qualname = sqlalchemy.engine
++
++[logger_alembic]
++level = INFO
++handlers =
++qualname = alembic
++
++[handler_console]
++class = StreamHandler
++args = (sys.stderr,)
++level = NOTSET
++formatter = generic
++
++[formatter_generic]
++format = %(levelname)-5.5s [%(name)s] %(message)s
++datefmt = %H:%M:%S
+diff --git a/backend/alembic/README b/backend/alembic/README
+new file mode 100644
+index 0000000..98e4f9c
+--- /dev/null
++++ b/backend/alembic/README
+@@ -0,0 +1 @@
++Generic single-database configuration.
+\ No newline at end of file
+diff --git a/backend/alembic/__pycache__/env.cpython-39.pyc b/backend/alembic/__pycache__/env.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4168b8ba190f449c4dd736093d08db3a1dadfaf
+GIT binary patch
+literal 1490
+zcmZuxL5~|X6t+E+naN~!lHKj5Te_uykWelQ+);(-6-AXm0_HMu;+J$ro=LEsRkvzS
+z>2=jR;*cEqOBOe{^e-SlJUdxPfwBDNy=VK`?|YxkkB(B}zCVAiKI#zii#HBLg!<>$
+z^{*%d5mb_f7L+=jNmelY2Qp~FBJ{pccABV&nz)F)-H}PtExMEdtJ6(S5Xc~eqcz>+
+zTT=H$bdRj*mif7{95lzpvDXuM(wr8jUhm2~%~^4VF}n4z7{ai=E7*#vAAmZ2ji-U(
+z=3Jz3T;FrC;Iw|HxG$LK{YXV7j$Vbu#oo$AAFT(_-MqUc%EHB(P|`;5!2JdLii`$t
+zFjF$3Hl0-x9xvKiH6NoHKH=u+h}jcp=T!^kOf8yn>W6K(Tr4EciP1Lj%)Fty5Qzq3
+zs&=m3`Y*T!{720~fYi@({k`OJ`V^Y$%awAgBL!xq+Ns<B@JrBmj9q_;!jPI8RtF{&
+z6mtqHD#9DY-jGdaOJ1LQE!tu>-(ZbGZ0i6s9DGXjqfgN5+IQFm!CX7zuWh>IiZ|L^
+zOR$}mHy}o#4e&&^Z@8L+DH||caKr79tPChF%SqJ=Z8K4E2~$%pmPU_a<+x(IJ4jXv
+zlsh+0!j%(Dy~L2J?_9?dKm<#pc&qu;REyT;YSoraHCNo3`X{1>IMa*Ya@?euRMU^4
+zy}Ddp+u_@D%f)Oau^?`N9-tsJ#Ky2izeiC@)j9g!0+peoi`|3z3Kc^P-7rJzpdwo)
+zs0r(iU^l@_@`7v-%-7?W)Wmi2f|{-fZjfRo-lTiD<4x~>;r{jz?*A0y>TuK-BOE{P
+z9dH7v7A+Obs%N(A=rxsGYjmavaEquTP9Dxtrb0}?Mtd&yT*>rqf<4(e%c`wzeG0ER
+zvB`KP<r56+IqTy2@~IOX^kLN<r=6j|J$w5-`9y-c?*{%ZkGhMdJ^Ob}T33?yaY(y}
+z1dEYj5C4cdDa|Ps<pcDN9u~P=%#jT9%iTehD~%2GwYKpR@0+Y9DsZm!A7p&GyDZ{8
+zHFnes-3l93tp;T<h*35vOLvRQ(#8t(LSBK3tDrTy==0?gw^eYvx8rM(JFl2rYS7w2
+z?08ZH=v3~ZR2S|rgFUJ~w7W94j~BgcII<e=f?Ia#<|Vf`XNRccq0ig)D}77b(me+U
+uaC%@prpaeGw36`1Jtq1?6d6ru#s=8mV;KUPu?V3|Sx%!M@8wxS6ZRLN`g?N#
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/alembic/env.py b/backend/alembic/env.py
+new file mode 100644
+index 0000000..48710b0
+--- /dev/null
++++ b/backend/alembic/env.py
+@@ -0,0 +1,48 @@
++from logging.config import fileConfig
++import sys
++from pathlib import Path
++
++from sqlalchemy import engine_from_config, pool
++from alembic import context
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++
++from app.core.config import settings
++from app.db.session import Base
++from app import models  # noqa: F401
++
++config = context.config
++if config.config_file_name is not None:
++    fileConfig(config.config_file_name)
++
++config.set_main_option("sqlalchemy.url", settings.database_url)
++target_metadata = Base.metadata
++
++
++def run_migrations_offline() -> None:
++    context.configure(
++        url=settings.database_url,
++        target_metadata=target_metadata,
++        literal_binds=True,
++        dialect_opts={"paramstyle": "named"},
++    )
++    with context.begin_transaction():
++        context.run_migrations()
++
++
++def run_migrations_online() -> None:
++    connectable = engine_from_config(
++        config.get_section(config.config_ini_section, {}),
++        prefix="sqlalchemy.",
++        poolclass=pool.NullPool,
++    )
++    with connectable.connect() as connection:
++        context.configure(connection=connection, target_metadata=target_metadata)
++        with context.begin_transaction():
++            context.run_migrations()
++
++
++if context.is_offline_mode():
++    run_migrations_offline()
++else:
++    run_migrations_online()
+diff --git a/backend/alembic/script.py.mako b/backend/alembic/script.py.mako
+new file mode 100644
+index 0000000..fbc4b07
+--- /dev/null
++++ b/backend/alembic/script.py.mako
+@@ -0,0 +1,26 @@
++"""${message}
++
++Revision ID: ${up_revision}
++Revises: ${down_revision | comma,n}
++Create Date: ${create_date}
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++${imports if imports else ""}
++
++# revision identifiers, used by Alembic.
++revision: str = ${repr(up_revision)}
++down_revision: Union[str, None] = ${repr(down_revision)}
++branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
++depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
++
++
++def upgrade() -> None:
++    ${upgrades if upgrades else "pass"}
++
++
++def downgrade() -> None:
++    ${downgrades if downgrades else "pass"}
+diff --git a/backend/alembic/versions/0026654debb2_init_tuning_cases.py b/backend/alembic/versions/0026654debb2_init_tuning_cases.py
+new file mode 100644
+index 0000000..5341a6f
+--- /dev/null
++++ b/backend/alembic/versions/0026654debb2_init_tuning_cases.py
+@@ -0,0 +1,40 @@
++import pgvector.sqlalchemy
++"""init tuning_cases
++
++Revision ID: 0026654debb2
++Revises: 
++Create Date: 2026-04-13 23:30:43.361751
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++
++# revision identifiers, used by Alembic.
++revision: str = '0026654debb2'
++down_revision: Union[str, None] = None
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    # ### commands auto generated by Alembic - please adjust! ###
++    op.create_table('tuning_cases',
++    sa.Column('id', sa.Integer(), nullable=False),
++    sa.Column('sql_text', sa.Text(), nullable=False),
++    sa.Column('status', sa.String(length=32), nullable=False),
++    sa.Column('owner', sa.String(length=32), nullable=False),
++    sa.Column('source', sa.String(length=32), nullable=False),
++    sa.Column('sql_embedding', pgvector.sqlalchemy.vector.VECTOR(dim=1536), nullable=True),
++    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
++    sa.PrimaryKeyConstraint('id')
++    )
++    # ### end Alembic commands ###
++
++
++def downgrade() -> None:
++    # ### commands auto generated by Alembic - please adjust! ###
++    op.drop_table('tuning_cases')
++    # ### end Alembic commands ###
+diff --git a/backend/alembic/versions/__pycache__/0026654debb2_init_tuning_cases.cpython-39.pyc b/backend/alembic/versions/__pycache__/0026654debb2_init_tuning_cases.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..509d685e7ea57e1ab21ff325a3cdadc46f75acb7
+GIT binary patch
+literal 1267
+zcmZuxO>fjN5RIK|Hk)R5OQ{g;0l4t77Zz2}6GBJ@B!pBDEgW)*yzz9Kk~oX)v@B<?
+z{RbSn+_>{=EN-0m2Z#e=>|JOPb(Bfw&Dit&JPGS|V-LsWUtf!`<$2$%b9MyiJj7dl
+zLi5Vw9w()j5`5B<R(|SNK^hQ?`(>*N)6l(>vYkdeNIMY25^vqdS!n_R#GLHWH4m}S
+zVO@)X5Ahmi?D;Ozc9GsWk;q1P=Of`UU-}TF{e_qCE_%zH?0AFTcjW1952%TD;B5mU
+z2h(~bidqbaq4gw9?%dhf+`M;}!)UZ&A_<3u!l>!;`bcD_?np9`?`I_&L8(m4VFH4y
+z%&ikj(2W$iEp>ME(b>XVeL<tW6T*q62R^5oo&+<LhzG~MLt2Qm{y{>-L*C}mF*%dh
+zITwx3MVEB@AUfzA#2f{|ReFD`^)Y`5{pDlibCU22Gh1WjI6$w<>5R-e_SjIqi`ypA
+zjVQ!8%b5aYXu+SLa*=3Cl%fO^skddO;hi?2(o8q%`!(Dwri3MkvEDZ=)Da{`>qesZ
+zU7HWp2sp=83omrZJ};_W6Xz0`2A(l(Yv`ha_qBlcEm0rc8sHiB6v#u68HYXAlv*aX
+zR8QKbG|7B&rX4M+m<hM)vZ;h=KNT9r$RXHuJa@Fj(k7aW4<XmJG%<2wWxfy9)PxHx
+zeEoQ9_xVc`Jwisi$ixJ0m#Z&iQ877v2GgxtC@onb^k+|AM-I;XOo#h*1w(iT6_R()
+zY@s15vcrwxh~;mvd4{Y+9g2L2JF+dOhG$zbD@39H%yZh`o=i=<nT#dla0#oaRWu$A
+z$qHVV+_g@wkm!fJiTHob=p*Qwv4=17W}K15G1F~nKl=flOBr)nPv%0N?rZ*b1Jg{$
+zejAR5-L;}<JSqoh2N%r6KeFCFRaIWWm<jcCg2GFiFD)I@UP$1|%BvP%vj+b>p7Bv!
+z)6X&{M2($g70NP+{o={CHIX%TtFH37M5Fsv&6^S)5KL1mXyRy@CL{_HvP#y;y5H;n
+E1}Y>>mH+?%
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/alembic/versions/__pycache__/fa5cc8952b39_add_plans_bind_vars_and_case_details.cpython-39.pyc b/backend/alembic/versions/__pycache__/fa5cc8952b39_add_plans_bind_vars_and_case_details.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..20b633acaad141e0693aa8ed8a683bb26ae3f58d
+GIT binary patch
+literal 2463
+zcma)7OLN>r5Y}t;+SS@PPKZqi;+13r@!BTN!-SAvld2R|DGDc-y{Kl@v$ldBn;ETR
+z`$AF0)i;h5Wgqz`{DwJj;p969iW5DfT}QD^1*z1U>2K8iO;2}=1c9&N^`rGi;s=`c
+zr<~L;3nvfo;lHAIrh(SeKnEk$Goxo@X3x~++)S;k(QBx&mD)WA8a<bK)Cc>X22QU@
+zP3nO)Fy=JWxu~;xEvcgh_2zIkFcsn{Bsc@{B?8S~bZ9~FlhtdFXKk3m*%VkCT4#Fi
+z2LccdQ<C$rpX3m26UIZ5Ll_fIL!c!|QttcT(d~pMMIJt0UkwLjC64dhU0LpbcDF((
+zUkw)*mv7x#xe2u2U-s7+B_$2lQLKi`h}>Abd1L8jxO8WAX>oOVW#QJHrQ5exeE$f8
+zq;(A8ZqOGan#WW$p5^GMqYI-LKIygU&V<XxJVdMRP6SZA%%fv4=rfYXTTx2-H08nv
+zI;1)9NSU=6Ek`VmrQ`ZFgOfFU_|Jx>mD+(0dTBg2!6=Ob>rev|tbJ2y8mBZi>KovI
+zyN@S(yv|cvJiXVnP5jzMd#&Sj!PwqJgSoJ&LmQtdn3g^dTrdvxLr+Iu&pqVk!&`^Q
+zPpvayX5W$sGCude8P6(i=TC6EP-8q{W5U~G#;<mE@dRTN=1ytmPifv6+j(XA68dXm
+zB;MV}SRb_DGVaQR_x3H+|5p@(S`<QDf9^yS0(c+4HsJ%cmk-qrmB&LvMQMV6r10v@
+z&cZ)dcy)Sb;aA@9{na<%*Xq$Y!L4%=0}ZS7`V-Nf6lp^GDdoaQ;1QOJn~zdV_LK@o
+z)@_u4uyT^oqX(GKh}$X6H_I*I0VzpT?hffuh=^!xlXOI%3U^rWq{On@n<__nl5a-R
+z3|~My&f3F`wTJ6pOD{zZG^HgKbIDHhIurE)`jyVm0@ku<sJ4QyEwptsE&X{?72zDI
+zs9{NWN@2wXFNIH2GUODZj0>kf8Vo4oxQhba`LSvz5Rp>SD3grt6*=8&<i*Qt9qb-$
+zPT4kP5zqk{r6t3@tchtPsVGdiiB^4cqERMgN{@b*Yuy+-)n>tVh0R~2GJZ`SZ_$iI
+zGK?Zfa$aIfq1CjFc95uCsW#v-B7;X#+G#V{|3#}}9F^)&3{Hf-R-~gW7tZ4xJy9m?
+zjgn!ch4oa%VD?eLXtJ4qLwDB-bjC=MqxM^tWQ6U$uALaieoc3TJ`k?#vrjQ9!cu&E
+zZ0b?0{Qah}FOZND|76{*BBNcpLo*DYdPn1skR;k(?)FLiJ$A}2?j-9caTjAMyFTyM
+zyKp3}SAm`60FUsOQH6Q@%UBrh3THIjWCZAWB*4Eyp&7P5gZBlz<$FeV|F-;j{iIeR
+zmnHg_)t=YG<NK1%zC<ghTDJ^&)w*#|wQg*fRk_PHY1YP8ZQQ7h?b_I>jooVe+(5e~
+zc-U}!Xzo|GE$|O@)s8B(g=kPi1Bt5AZ9idGksIquu^`0_DL$3r6Dh7saZQRVQp}^k
+zRQFZ>sH9^TrM@ZkjVi~Qz>4AcnDHMcCn_V@U0gI)sPA88KsCBAaZmm-)$x3eQ+@%3
+zX0-JBJ*)frtj^XE=}ZeJilB(2NZ8mvFmW0FCN*ZF5Y9MXDqcR;1xaP~?6M`frXkmu
+znA2h^!bHK6R^`H@h&d8>rSPPXr>p#(N!h)Z6);NaeI1u^`M<WEY2@r$E#x_`&ztQl
+F{{oG^mKp#6
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/alembic/versions/fa5cc8952b39_add_plans_bind_vars_and_case_details.py b/backend/alembic/versions/fa5cc8952b39_add_plans_bind_vars_and_case_details.py
+new file mode 100644
+index 0000000..195bbcc
+--- /dev/null
++++ b/backend/alembic/versions/fa5cc8952b39_add_plans_bind_vars_and_case_details.py
+@@ -0,0 +1,72 @@
++"""add plans bind_vars and case details
++
++Revision ID: fa5cc8952b39
++Revises: 0026654debb2
++Create Date: 2026-04-14 18:10:25.681775
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++
++# revision identifiers, used by Alembic.
++revision: str = 'fa5cc8952b39'
++down_revision: Union[str, None] = '0026654debb2'
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    # ### commands auto generated by Alembic - please adjust! ###
++    op.create_table('bind_variables',
++    sa.Column('id', sa.Integer(), nullable=False),
++    sa.Column('case_id', sa.Integer(), nullable=False),
++    sa.Column('name', sa.String(length=64), nullable=False),
++    sa.Column('data_type', sa.String(length=32), nullable=False),
++    sa.Column('value', sa.Text(), nullable=True),
++    sa.Column('position', sa.Integer(), nullable=True),
++    sa.ForeignKeyConstraint(['case_id'], ['tuning_cases.id'], ondelete='CASCADE'),
++    sa.PrimaryKeyConstraint('id')
++    )
++    op.create_index(op.f('ix_bind_variables_case_id'), 'bind_variables', ['case_id'], unique=False)
++    op.create_table('plans',
++    sa.Column('id', sa.Integer(), nullable=False),
++    sa.Column('case_id', sa.Integer(), nullable=False),
++    sa.Column('phase', sa.String(length=16), nullable=False),
++    sa.Column('plan_hash', sa.String(length=32), nullable=True),
++    sa.Column('plan_text', sa.Text(), nullable=False),
++    sa.Column('cost', sa.Integer(), nullable=True),
++    sa.Column('elapsed_ms', sa.Integer(), nullable=True),
++    sa.Column('buffers', sa.Integer(), nullable=True),
++    sa.Column('note', sa.Text(), nullable=True),
++    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
++    sa.ForeignKeyConstraint(['case_id'], ['tuning_cases.id'], ondelete='CASCADE'),
++    sa.PrimaryKeyConstraint('id')
++    )
++    op.create_index(op.f('ix_plans_case_id'), 'plans', ['case_id'], unique=False)
++    op.add_column('tuning_cases', sa.Column('title', sa.String(length=200), nullable=True))
++    op.add_column('tuning_cases', sa.Column('category', sa.String(length=64), nullable=True))
++    op.add_column('tuning_cases', sa.Column('sql_id', sa.String(length=32), nullable=True))
++    op.add_column('tuning_cases', sa.Column('schema_name', sa.String(length=64), nullable=True))
++    op.add_column('tuning_cases', sa.Column('instance_name', sa.String(length=64), nullable=True))
++    op.add_column('tuning_cases', sa.Column('tuned_sql_text', sa.Text(), nullable=True))
++    op.add_column('tuning_cases', sa.Column('rationale', sa.Text(), nullable=True))
++    # ### end Alembic commands ###
++
++
++def downgrade() -> None:
++    # ### commands auto generated by Alembic - please adjust! ###
++    op.drop_column('tuning_cases', 'rationale')
++    op.drop_column('tuning_cases', 'tuned_sql_text')
++    op.drop_column('tuning_cases', 'instance_name')
++    op.drop_column('tuning_cases', 'schema_name')
++    op.drop_column('tuning_cases', 'sql_id')
++    op.drop_column('tuning_cases', 'category')
++    op.drop_column('tuning_cases', 'title')
++    op.drop_index(op.f('ix_plans_case_id'), table_name='plans')
++    op.drop_table('plans')
++    op.drop_index(op.f('ix_bind_variables_case_id'), table_name='bind_variables')
++    op.drop_table('bind_variables')
++    # ### end Alembic commands ###
+diff --git a/backend/app/__init__.py b/backend/app/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/app/__pycache__/__init__.cpython-39.pyc b/backend/app/__pycache__/__init__.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..10d4e8b6ff2c2103d3ff4638f3507b152cc04b1d
+GIT binary patch
+literal 146
+zcmYe~<>g`kf(L)^WP<3&AOaaM0yz#qT+9L_QW%06G#UL?G8BP?5yUTZ{fzwFRQ=S7
+z)ZF|$2pwNinwOcE9-o*QUuLAAl$e~InwO%VSWuuJAD@|*SrQ+wS5SG2!zMRBr8Fni
+L4rJhGAZ7pnO3Wit
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/__pycache__/main.cpython-39.pyc b/backend/app/__pycache__/main.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea4f3513fe3b6444af3b4b2f5c0bc9c5c63b0d32
+GIT binary patch
+literal 582
+zcmYjPyKWRQ6t(A_$?OIyB>rG1b|lh9Q4kVRiU3Ne+>FflX4i}DS=rtsd_?{sDO2Zf
+zMs!qksS_b_y%QEJ-Q#nP?c*!Ud@?Bsj)&hr<UJ+iXAu979K{iqyFd^`P(?Illm;HD
+zNXIPR@K_}}W$A_|D$_a3b-@ZsfI_<55$QE$C6vouh*4J}6ZxEOs<_5eP~J=+Urui^
+zdBcm5i=8u4m%s3CQqv*-z@2~h`55W+{ioBj6Dfp(OKt(3!h!eF%v~J~*#fxoi=pys
+zgI3#d2M+h7UU~&z2KuH>*n}(9U$(uKb7>rVIm*t00OKWB?(Yr_e$k7q#B2f9eXRFb
+zevS?Cm9!By$X-3Gncns_>w4>K99H-EY850Pm~%O|NpSPvhJ+NA%@BqHt=4c2LyU|~
+zxe)EYL{^2!ZP!z2I<*$i+J5c9vTU61h}{i=0Ur08MX#ZOE6}|e=l1zwxNI-pHeY%7
+t4UA~;x<+$pW~=W*aiDv#R&a>Fg1FZR6|JI*zKE(Qp%EP`dCH24{sC`|qo)7>
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/api/__init__.py b/backend/app/api/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/app/api/__pycache__/__init__.cpython-39.pyc b/backend/app/api/__pycache__/__init__.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..05389de8fc323a629073fd0d0018bdbbe714f1c0
+GIT binary patch
+literal 150
+zcmYe~<>g`kf)9W1WP<3&AOaaM0yz#qT+9L_QW%06G#UL?G8BP?5yUTR{fzwFRQ=S7
+z)ZF|$2pwNinwOcE9-o*QUuLAAl$e~InwO%VSWp1OnfmeZnR%Hd@$q^EmA5!-a`RJ4
+Nb5iX<hJFTO1_0~dB+mc<
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/api/__pycache__/health.cpython-39.pyc b/backend/app/api/__pycache__/health.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..96d6e44f9ad4b0dcd625655fb775875e0ff51d95
+GIT binary patch
+literal 923
+zcmYjQ&1(}u6rVTynKY?IQ0Q%M?SdreMG7jGHhzFsX#`;|VRmPlEZHw-Hnk1))L#7$
+zdPt7`ON%#8y?GV{-)ti73-jiEOy0-uz2)6*n;`xE`!jh>3HfD|yX2tq5|2JbCWwHP
+zWWXS!jDpc=YGpRF8`(;o%w=vP+o_lN%m*StIAaj*cVI2qTC|0?1mO$kid+KQXe_NI
+zNGknHI05O3_BDtN(YbQa-x1v*2{&&rHwkIo+W+|WxR_N^)!v~jWiE6GwOz@x3U6;H
+zwN8p0MRzQ#k%(${B6(U(nn!%B=U#thh)uw|gsqbUJlaPlK+ps*v2|3ty5iML*R+`a
+zAZi1>x9rbee^O+!FVAFF<g0sB&GIB4k9aaVebSG3JjE*eye#n~>+HSqTzMGDAg@hk
+zLg($ZuP-93mWn6_<5-i0w~ePM@eqXzvLF=*xP&Dv=#ng~CHV$xD{ZVcTIdA`Ynupr
+zY9wcyRL%u@g?nvbd*0D}cQ|-AIQSGi4)%vZF?|%oGo@sX;PHw_T+7|ictkXRx_*gR
+z=RA|atK$#vgK|7VUFHV%;Paco@gP|HpYNQ?xGL0+GF{%7W>gnhXfa1bqhiYZ|0$SX
+zj#rOEmw5<gY$j~lt^Ev<LpXKqoFqzDIF6X7T-A0|6lrKRA!|z&Uuz2!-;PFg%->t9
+zY2zl`Lsh%T2z?0mK|Mg}DD2kW3C97Ki85nQ24>dQUs9gN6PcYiMX=3VL$6SoGM@z7
+z#KL+a>gm<aDHFSP)oM8{T)$?*O`bbdHT%<)=0D2{F-zqOgN)unwgnyNQ2bdwv~3^$
+E0aSA2TL1t6
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/api/__pycache__/tuning_cases.cpython-39.pyc b/backend/app/api/__pycache__/tuning_cases.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..23bcbf53caeea892bd9ce34f23669c364d162e8d
+GIT binary patch
+literal 1749
+zcmbtUJ8v6D5Z>K;@OU~NNxdyQjuIpYhyY~ZT2LNVfTR%wOGt4*KpbyZ(#iMo?#Yo9
+zs)^jX2$0eRS^96}7o^@IO{&!C(j+rWDx%!x4m&q9`|a({H!~ZzT0Vj2SLgTii9^UA
+zXe>V9BVWK!zk%R{(~RUaqB)CLZbcSFAIt3AiJaVxTw_~VBljZD=yul3{m3`ElP%>z
+z6d2vjT6q|Sc{^$wyODMBZq&_}qvd=hTFF<VRZ0Zq9&esd?!RWynpitq=SyNkbRQ5N
+zyk>$4|Arn@;qcZQ%0u3M<=oI{)8IN{`5xv0pt^4uU*;<YwZ&HtNpI~>h>G+q-Td<4
+z+h^r@Eu?PjiAoe)>DD(#M+aYDB%-R*vgk40I21~Osskl5k<@9Cl`-#8?apk}PDDNA
+zBhdV#^CB%yp2kYRQu`o_Vcl10!M}@T8jmv3vvv0lb9kQTvAoosJJ+75<22JAE`26q
+zt~-m%(R1Yw;wl{^u!qt?Z8jVl3$}DCDUQ<%ZP)RM(gcnaN};N<P-2*uTx4&lW_*-T
+zq+tG_?!tHqLwyKhOeUnJHM^k`t7d2R#F>&QozjUrC6mUK0EcwH=jn#H5DC)PfJL$i
+zLVKm;LJmilnx$M@u}XA9C2<x@1y+{HH9);3@;&(c{rTXu%*6oyl9$EoJDkT8r^A;|
+z2BSE64q1VCD--i#u>I;%`&p{$S?q22p<*BilkbBBmVQK1hAF?sEY5Yg4s(gYAr>Bt
+z{J-cYV2mk7KPFRl&Bjb^)r?clZrD#0W~|z-q24BL?VL5n<T(RYJkXmHf6mboa1>0*
+zwKYe#47#;|Zk>gO&0C~hw<n!3{OQ`^7PnuKv9(8T=-3%{xnpd5ZZD4=;NIO&e}SA`
+zHH)&|J}%D-elMLE95(PF429vIKtjI{uW3yt5W<xH%wE`svlR503<04-QyasVahCG9
+z#@c25&or$}o@U}P;`|+CJSp>PcN^@#V34avSpLXwe<v#;*J>A(TiE|O8s=1f00NGQ
+zb*bs-odd~_z>Ns`F~U}~1!pmpC~fp^pfJ^m7oK*0I2BUJZS-z}h@9#a&aG`OR3aau
+z`w@yI5ZbFsmEt8JTj;}Gv{OM_swf;mO9NZ8o>o0~_DdvNTjl6XermvoQrhLFrQbQZ
+z_HJ2Q1+3ZvL0CX->ce>aPhi<}3#3mw@X7(q?)M(*#&N7_=zfVwmKF+(Q-|tB7H7$+
+z$S?b)%q8YuVpVJZZpILyLujTxANAq(z-vu<fQr`9X=*_A7n;m48MPNCF@A|$8jhk3
+zoKm=Ne1Bnp5W^eRm&8nJSDL$4eu9RL6=FJ7TWL|72p1^A`$3wL^LF4|=b6}rlAqP{
+SDlifNR{?xC?a)FQ(0>8rezhO~
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/api/health.py b/backend/app/api/health.py
+new file mode 100644
+index 0000000..27b7b90
+--- /dev/null
++++ b/backend/app/api/health.py
+@@ -0,0 +1,19 @@
++from fastapi import APIRouter, Depends
++from sqlalchemy import text
++from sqlalchemy.orm import Session
++
++from app.db.session import get_db
++
++router = APIRouter(tags=["health"])
++
++
++@router.get("/health")
++def health():
++    return {"status": "ok"}
++
++
++@router.get("/health/db")
++def health_db(db: Session = Depends(get_db)):
++    row = db.execute(text("SELECT 1 AS ok, current_database() AS db")).mappings().first()
++    ext = db.execute(text("SELECT extname FROM pg_extension WHERE extname='vector'")).scalar()
++    return {"db_ok": row["ok"] == 1, "database": row["db"], "pgvector": bool(ext)}
+diff --git a/backend/app/api/tuning_cases.py b/backend/app/api/tuning_cases.py
+new file mode 100644
+index 0000000..e1544cd
+--- /dev/null
++++ b/backend/app/api/tuning_cases.py
+@@ -0,0 +1,34 @@
++from fastapi import APIRouter, Depends, HTTPException
++from sqlalchemy.orm import Session, selectinload
++from sqlalchemy import select
++
++from app.db.session import get_db
++from app.models.tuning_case import TuningCase
++from app.models.plan import Plan, BindVariable
++from app.schemas.tuning_case import (
++    TuningCaseSummary, TuningCaseDetail, PlanRead, BindVariableRead,
++)
++
++router = APIRouter(prefix="/api/cases", tags=["tuning_cases"])
++
++
++@router.get("", response_model=list[TuningCaseSummary])
++def list_cases(db: Session = Depends(get_db)):
++    return db.execute(select(TuningCase).order_by(TuningCase.id.asc())).scalars().all()
++
++
++@router.get("/{case_id}", response_model=TuningCaseDetail)
++def get_case(case_id: int, db: Session = Depends(get_db)):
++    obj = db.get(TuningCase, case_id)
++    if not obj:
++        raise HTTPException(404, "not found")
++    plans = db.execute(
++        select(Plan).where(Plan.case_id == case_id).order_by(Plan.phase.desc())
++    ).scalars().all()
++    binds = db.execute(
++        select(BindVariable).where(BindVariable.case_id == case_id).order_by(BindVariable.position)
++    ).scalars().all()
++    detail = TuningCaseDetail.model_validate(obj)
++    detail.plans = [PlanRead.model_validate(p) for p in plans]
++    detail.bind_variables = [BindVariableRead.model_validate(b) for b in binds]
++    return detail
+diff --git a/backend/app/core/__init__.py b/backend/app/core/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/app/core/__pycache__/__init__.cpython-39.pyc b/backend/app/core/__pycache__/__init__.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..3278a4be123da30b761a14d388559de413e8b561
+GIT binary patch
+literal 151
+zcmYe~<>g`kf(L)^WP<3&AOaaM0yz#qT+9L_QW%06G#UL?G8BP?5yUSW{fzwFRQ=S7
+z)ZF|$2pwNinwOcE9-o*QUuLAAl$e~InwO%VSWuv!oL`ixA0MBYmst`YuUAlci^C>2
+QKczG$)edCpXCP((01Un*F8}}l
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/core/__pycache__/config.cpython-39.pyc b/backend/app/core/__pycache__/config.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7ec95ee63fc552645f6772a5eb51d4897894b6e
+GIT binary patch
+literal 799
+zcmZ8gO>fjN5Otj0ZMscMw-N|$To<JMYFCI=g-SnEIIy5rTzs+Ic$!AdI;rigx_d2G
+zeh7cbLI{Zye*p=^INg>CTb_((Ui_XX6S2D5BsjkR{+fLY2>IbR_eTvkJGjg<G?K_5
+zCzF5$6Ut~n4vC~P{6u63!F9+&2(JmN$=We#*MB0Ow5f}Cg@I$RHdCo_8@JwGp-!`O
+zKTB-lf%nH9<q<}Kus{+<KN1LK;ORb7Pr>TYfF)VqCbGez%3nf1V#}4kjDAzDq?9#b
+z1sYEXVq=W0qO>&^-Kv<^I-o9HBTH4Gp-u55b;(b&99$i)tQPY}a0L@?rwZkBkv%;T
+z$vG(LB2kuHi3!Yi%fi@HgSp6`mu8j}WjgA1{cDAS(c-z&AH3-FaP~*Tt<6D|{&%X2
+zrLf`z3&p28XRW<Aug8Z6{M`Y6JLVsb-tW7nfkcDl=P;W;JhQe$io8ffeum_u&0cRf
+zf4m6yk)+qz8g}~qmsQ5aNudodbe3kyjN7q`cqN^4*W`Rs$Y~Df$DChGMeZ-fxel@T
+zEXE|{JgGjGUc!(Ijn(b}=R&E%3Y!(mAUeX7UiQYfldI*Kv0sR8`G_~aM%}Yw0=H%P
+z@BaL9&|MU^i*@ayUO?kJq*KncZwSB48k%Mh(>TCMX+Zx}xpBMBTIEa%WwV5vMXza!
+i=;|63$VGRFJ5@LOHW25c?VCEh!k>T`&$b?}$A1B&GuvDM
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/core/config.py b/backend/app/core/config.py
+new file mode 100644
+index 0000000..dfa148b
+--- /dev/null
++++ b/backend/app/core/config.py
+@@ -0,0 +1,16 @@
++from pydantic_settings import BaseSettings, SettingsConfigDict
++
++
++class Settings(BaseSettings):
++    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
++
++    app_name: str = "exem_tuning_ai backend"
++    database_url: str = "postgresql+psycopg://exemone:exemone@127.0.0.1:5432/exem_tuning_ai"
++    secret_key: str = "CHANGE_ME_IN_PROD"
++    cors_origins: list[str] = [
++        "http://localhost:3005",
++        "http://10.10.45.119:3005",
++    ]
++
++
++settings = Settings()
+diff --git a/backend/app/db/__init__.py b/backend/app/db/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/app/db/__pycache__/__init__.cpython-39.pyc b/backend/app/db/__pycache__/__init__.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..5a066889f5aa8970fd0e0534406c7c06a297a4ef
+GIT binary patch
+literal 149
+zcmYe~<>g`kf(L)^WP<3&AOaaM0yz#qT+9L_QW%06G#UL?G8BP?5yUSm{fzwFRQ=S7
+z)ZF|$2pwNinwOcE9-o*QUuLAAl$e~InwO%VSWuv!lB6FWpP83g5+AQuP<e~PCO1E&
+OG$+*#WaeieW&i-WDkMq(
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/db/__pycache__/session.cpython-39.pyc b/backend/app/db/__pycache__/session.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..d4b39f2e88cd08c7dfdcc703c37d169dbd6d5c1a
+GIT binary patch
+literal 762
+zcmY*W!H&}~5VeyuO|uED;3vqXLEMlKLI}YH^|A;gUo1DCwqflgYbUE+w48RY`wwvB
+z5BL^~0}>~G0SSq5vuKMgPu|Q#GxOevJWmOpAAi2r-zXtJy>obCbe`k05{)F1DxxW)
+zI$#0yexO1fv1pG&HPJDPDS1s~Bq!HIPJmv8Yzh&?9}*eko!*3O1_8`uf;X14n~0?{
+zl}Fcv9m(vN6!|agM2f)8UqYpX5q*6IFN6h`S+KTl8!b-26x8LF0nr18W?MIafy6@J
+z*Ui>ezQo}{Y9oyd0T4zdVS%LBE^v`AzA8eOaNY<FoV%2B-O53EoN<0S2sLKD665vS
+zo8M2$U8|vlbI@%wetADMH~<$lKYLuRMRfv=EJfFqa$Vkzzw9oImvxHI251tx_ut|y
+zdDpgzcLsQeWn8=&`oX}fB688XZX}zDp>H>8usfG}ShZT$y~(l4f1Ewv<Thv@BIwB#
+z`9wb6za;MnCGW{4`AokcYSMq`5v~*Uper0BJ06vO(^f*cNu^rr^$q0uj=nj<vM%02
+z&*gfK*!qTq#x$TwU>+b|6&br{PnA&B4)n#cHQIQ>CPd@XyNro^V2(O1tJVOTW>as?
+z#Q*E1a+wspSmU1fV3do;jhltf`$h*-?bov(EqOZb@R=9G`o%A37G&WfTF^!K7dYFv
+A-T(jq
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/db/session.py b/backend/app/db/session.py
+new file mode 100644
+index 0000000..229f28d
+--- /dev/null
++++ b/backend/app/db/session.py
+@@ -0,0 +1,20 @@
++from sqlalchemy.orm import DeclarativeBase, sessionmaker
++from sqlalchemy import create_engine
++
++from app.core.config import settings
++
++
++class Base(DeclarativeBase):
++    pass
++
++
++engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
++SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
++
++
++def get_db():
++    db = SessionLocal()
++    try:
++        yield db
++    finally:
++        db.close()
+diff --git a/backend/app/main.py b/backend/app/main.py
+new file mode 100644
+index 0000000..ee26099
+--- /dev/null
++++ b/backend/app/main.py
+@@ -0,0 +1,18 @@
++from fastapi import FastAPI
++from fastapi.middleware.cors import CORSMiddleware
++
++from app.core.config import settings
++from app.api import health, tuning_cases
++
++app = FastAPI(title=settings.app_name)
++
++app.add_middleware(
++    CORSMiddleware,
++    allow_origins=settings.cors_origins,
++    allow_credentials=True,
++    allow_methods=["*"],
++    allow_headers=["*"],
++)
++
++app.include_router(health.router)
++app.include_router(tuning_cases.router)
+diff --git a/backend/app/models/__init__.py b/backend/app/models/__init__.py
+new file mode 100644
+index 0000000..7f6208b
+--- /dev/null
++++ b/backend/app/models/__init__.py
+@@ -0,0 +1,2 @@
++from .tuning_case import TuningCase  # noqa
++from .plan import Plan, BindVariable  # noqa
+diff --git a/backend/app/models/__pycache__/__init__.cpython-39.pyc b/backend/app/models/__pycache__/__init__.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1104358b2bc7fff632a25d011986618ab394a8f2
+GIT binary patch
+literal 255
+zcmYjLy$ZrG5Kh_%qU}4lb}`^AMRXTI5zG>z2^vh&lK!BN<STV>aq<<Myr_c*_x&6n
+zcPG+xfS_7(*E`@xF#i>SnL$@00Er|v$YO?Z(2<F3%wkIz0UxhXMxGdA8SVy~#%Xt4
+zh)QKqM^;9-E}3g5x58_&H)@&n*s%VD_yJNr9Acz|ppQX%0&qjV7j%GEPEUnZR9%!U
+u+?V-pfzZ62(7iaEm6KGICAEcArlOo{r)$o~<+bZiVb~azhZn1GF2QdEdq1!M
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/models/__pycache__/plan.cpython-39.pyc b/backend/app/models/__pycache__/plan.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f2e59876c4a2df42ac540b4106233f5b6d27b58
+GIT binary patch
+literal 1773
+zcmcgsO_Sp^5S1M}b{xk^<}<Uqz(5rX0V<&uxKLBnegQ>MJ5V*Vd(cItM4B1bTDDhq
+z!i4K^o&NyGz42o>>A;24{DnQytz>656kKu2FWq`Asil5x-swaHp1JpD`iD=*U+BE~
+zc;MWJw>k$9L^v5ygc1jBH*=IrU28Y8hVrPVeCn$vZK{9<Dx{%m(U#@CEK+USRxypO
+z?`IvA(8M9%644aFFGK_~xoFTX_@QWl-?DyBL`P)UzJlG!&@rLlwX9Pm(f*;V(<0~D
+zuxXk{wNCR>;~mTM+JuiG>KLL-@LgWZQ>jh#O`&Cantv}B#ygqi)1hmcPk32MVLHnG
+zvuTmdR1Pb94|yf0xaFG<T+i|<?mC1>LLEV<`xLH(Hl!z9(YSP|FPk#hBQg};0g;|;
+z2_KJl=>i{Kx-`1xTb6H&=)$>hXbj^WJFmSOk1rgU(}6h&a9w0ApIE*JbNbhFx^`@1
+z6~AfYAqyMdTjRFYxc(Zqy~b@U_gSsEW4YHkY+7y?xUEY^4u0MHjfic?^cF<jw!7{e
+z5U~q|8yN4$jOWxZ0juMej%k-VRa`IFbEt%yidWrwmP6^-6z;qlrNRV{9vnS-@c3&8
+z4vSpKOx6-?KLz{T1Q^Fsan*xz7{5FN_i7((49{m-#wVFHE!>X*ceXNX)P*-Ks@g;{
+z<7FiUQ<VuOvy&64E92!wZAFFR`nkx_PAaMAQZpe>_$-5oQ!PPQg7Nxrc*lf{<y=X|
+zOvIQf#4JNQX6(g`XDg<|Sd9rSUEPK}H72gH>r5lfYtv<n=de3RF;|S~5cypMY(Bkb
+zBdc2Lx6o}MpcM7n2m!)72>S@{BD{ytL}&q+Mqd1+-$&O4cuDjKZG=}}j?W4u$MRe%
+zII{g`t8(y^&F_sTeEMAGVhjy3h9k<X8sp85%7yO00=Ry)0}wf$yW{LT19-QbJFB0K
+z`R_jZ9VY%CeFVLNJ+$nvj@51#w3~opdobR=?yZ|XLJs?=kKO#bk3=67y<y^qpu}ff
+zr&w5;Ou%FFm0KO_1WvWAaUZP>giVBP1gz`TeE?7#h)3T-vjtx@&gw-e^=<V1InQR&
+zgk@2ssEWhkmc9#w{s7@agdxJZob*RH_A$agBy<nQK0){l!K&wTw5*t{guX!cS{O@f
+zjANey4B)NsTsLJNK#47PIP6<pnI_~9eQeh>QS~C@+4M}R#Ztv~Ppe70olVfHGr5Tz
+z6<XQGum>{<h;Ae%Bls*-a0xobbWnA6-+xQiga^w${0hF%q{0cY6N4msZrtc~{{}N2
+Bn8N@7
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/models/__pycache__/tuning_case.cpython-39.pyc b/backend/app/models/__pycache__/tuning_case.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..d0e9e8e030be5cface24cd33b6219a1c58bb99c5
+GIT binary patch
+literal 1515
+zcmZWp&2rl|5C%w!q9}^C<6k+pqnVs^s5H~F+ev?BdTM%z+XF5bm_Qs(08#-#C(0=^
+z?$z(m9@{7BGvLrmPkx1-x`0$#nvkQ9yZBc7hXvSZlp=UOMSquH^$_~UDVt9O$_w~4
+z5`ZI)B~pkW?BqaV6_CKop$t_-BGn^36_Z%?N#CzWGEoCEP$@~h-jhR>k<81n9I2e-
+z82x~FpC`W}o{0P|Bs+ZY3Qf}oh=``xCY%{zN+q29)54T>#pE=y@hhXt>c&P_;)Ait
+z_h5AeRyKOwR>d^1@sDh=5ZsQG|I(tCt*XFD{EH||twD;uWsN9YoXw}J`A>|HKm>C{
+zf}f#w5{ifiJiN!GCt}ebBa!gv5{XC*c<&Aa7vBdY1#T#^G4gzW%_ki{+TsUmKJEB?
+ziywaW|D7#9`;6b+;zyp}yTjxOtV33ibG}+z=exgUzq7?1Y;n8mST5H+{sd}0?0oKT
+za0i|{>bS!V?#Oe;9e3=x6MoXwKlU+C*ZmuN{wd^odXL4~Z|A=w{uCl#fYmc!&Dka5
+z=P)rBHoa;q7>Vy-S4n2PObbw&E7<JeLYIo^C4DQFHYoYSU$E(Jrm9v-b}fbNnbJt{
+z@B-FtQouaj)Oz_aacbPWleFY^*c5MsVzgo~X``}g466#UQWIxm+%V=4TX5Rx1I<=r
+zD{OxuDh@e9;64|xSt|`VH_WsR30P@+_4`U_I6<sxnFOkCbs<U=LlPtBP^fFc*B%mg
+zEI!tiI~sW-^sUhJf2V1o1(d)kGcTtTn^2!5r8cEh)x4Dg<c!jH5XMyl+K5u)8nIIK
+z01DT+gT%EUEGuJoC}mYuL%whf8%ni1EPBsD=#3hq^}bUN9UM70b^w<P(kBka4o)4M
+zJGgN0%z?X!^aQ|0vIIX+GSYpghgJPvKX+;X@CVXgIN8C!-^}0CO3cLvp`Z``OV>Nk
+zN_zX{{F)VSq2+V91m;k;kj;E!GG>dV&cKh0-MCaz90f;s(!B@xta~Te+rFIc`aEoG
+zmJ8U*Rplvc4wG&=maC@tiXUspANg6WmG7x<G1*_--1-}7_GsdpVRJ}&#;<2E!433V
+k4<SLH!eawg(hLZjT(0)@Yq+*h<EqMVhEMP=&Vnrb4`5n-8UO$Q
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/models/plan.py b/backend/app/models/plan.py
+new file mode 100644
+index 0000000..34949c0
+--- /dev/null
++++ b/backend/app/models/plan.py
+@@ -0,0 +1,32 @@
++from datetime import datetime
++from typing import Optional
++from sqlalchemy import String, Text, DateTime, Integer, ForeignKey, func
++from sqlalchemy.orm import Mapped, mapped_column
++
++from app.db.session import Base
++
++
++class Plan(Base):
++    __tablename__ = "plans"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    case_id: Mapped[int] = mapped_column(ForeignKey("tuning_cases.id", ondelete="CASCADE"), index=True)
++    phase: Mapped[str] = mapped_column(String(16))  # 'before' | 'after'
++    plan_hash: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
++    plan_text: Mapped[str] = mapped_column(Text)
++    cost: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
++    elapsed_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
++    buffers: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
++    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
++    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
++
++
++class BindVariable(Base):
++    __tablename__ = "bind_variables"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    case_id: Mapped[int] = mapped_column(ForeignKey("tuning_cases.id", ondelete="CASCADE"), index=True)
++    name: Mapped[str] = mapped_column(String(64))
++    data_type: Mapped[str] = mapped_column(String(32))
++    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
++    position: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+diff --git a/backend/app/models/tuning_case.py b/backend/app/models/tuning_case.py
+new file mode 100644
+index 0000000..6fce499
+--- /dev/null
++++ b/backend/app/models/tuning_case.py
+@@ -0,0 +1,26 @@
++from datetime import datetime
++from typing import Optional
++from sqlalchemy import String, Text, DateTime, func
++from sqlalchemy.orm import Mapped, mapped_column
++from pgvector.sqlalchemy import Vector
++
++from app.db.session import Base
++
++
++class TuningCase(Base):
++    __tablename__ = "tuning_cases"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
++    category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
++    sql_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
++    schema_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
++    instance_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
++    sql_text: Mapped[str] = mapped_column(Text)
++    tuned_sql_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
++    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
++    status: Mapped[str] = mapped_column(String(32), default="pending")
++    owner: Mapped[str] = mapped_column(String(32), default="ai")
++    source: Mapped[str] = mapped_column(String(32), default="manual")
++    sql_embedding: Mapped[Optional[list]] = mapped_column(Vector(1536), nullable=True)
++    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+diff --git a/backend/app/schemas/__init__.py b/backend/app/schemas/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/backend/app/schemas/__pycache__/__init__.cpython-39.pyc b/backend/app/schemas/__pycache__/__init__.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..a715bf8538dd7ceb4ed76ffd12a210e24982a1f9
+GIT binary patch
+literal 154
+zcmYe~<>g`kf)9W1WP<3&AOaaM0yz#qT+9L_QW%06G#UL?G8BP?5yUTh{fzwFRQ=S7
+z)ZF|$2pwNinwOcE9-o*QUuLAAl$e~InwO%VSWuu}oSc!Gn^>$LAD@|*SrQ+wS5SG2
+T!zMRBr8Fni4rK6WAZ7pnlNTm^
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/schemas/__pycache__/tuning_case.cpython-39.pyc b/backend/app/schemas/__pycache__/tuning_case.cpython-39.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..b58cc782109ec895f4fe098731b3f5d49347a192
+GIT binary patch
+literal 1855
+zcma)7%Z?m16s_udS6BCRcn2g1k1QHNT4Fsy(IgTZ7$P!cQ5(x$_RN%0uh{M(y+eX6
+z5<9*jzrkmC!G;yTz>0HSJ)Hr~pj4}leQcLqb<VxF`D~VZxPFiRsDBGR?@uCEFN}Hj
+zaq9sfJmEK9>y@5Q{Ym4ulXB7qW#D+wgl$wtZCu8__mw9?5&i6mNJc*eWda_H1Uzv(
+z1y4l=o;jX@=VA&zl^NFOqIm2rXMf>TZ|U1qa3f9K%H_nS-wvkkJKosv>slL(WJg@f
+zZ+amcn?LBg)B5aTU73oWy?O;8_i^hV0n#gd;gyr`JsAjJOn&jpP)0Hq!J#J;wBaG%
+zy-Z~$liMD6yc<v4c#iSNji-*|t#>?gyx8;H@!5W#DRF#TVbezq@4k~<oV@Vu!Kvz7
+z#*I<+dSj%vlUmqlILDVA+ibu}hW`1kYvgld!>ZTD=Ca{~mV&j~ChN`VsZ`pAU2o)a
+zZd1lO-b%)7&RE-vO+)>Hv1c3Jj58{R8n(csY*^*gvq9Y%d%zg)un#A-H69DJQL4ad
+zMM|nU!2!X7;1=M8r*2c9;P0c=dEd&Fd@kF*8(U^JUEQ5AUbBlYR%>28m7Q4eVOZ(v
+zT((@Vb_*(e_Pt@N5^O~8r(Xl)e(tCEE!@38>*jCv`4Jv^6`!5o5qycS_)R{?<-dK7
+z;ag@GM|CHja8>hlBb|RL#Yu`X3Ccrnn;~8~Gur{?MHjr;NShA5u1U(}RMFR{*9qPr
+zpf6N!61+w5Ho-dt?-Mw&KcL=T+p+g9jlBn;?KBy4sSs)8W^UHzS1kWOZA4fm64CEs
+zoU{p{#U)2BfKT_Fv<k~&&nYLua<=El3B-RakPEIw4!E{JJIDBp)<fI5y>;Ru<N^GD
+zylGpmwkI#eg_fo^4YaIK4$gYDwXuHIFl5Sf3?LWnc2;-V@UD_0jX}&t+o=DclM0XY
+z8&yf0S4v_Vfuvg=yox0sLbA~fXU<1NKPLEu;4Z<0;5wV`V1lgD<nU+{1@QQzpiX^7
+zYi>5|31+VvCPU#vwn>SiB?H(LQt1Lm@!D~eurtqvbnfP1BRG|+!f~>30@)M0cq#is
+zX?We(l!T=+b8P2GO2~9MU^C@P0*4V16(()xYh(nw*rkMC&i*T>6U@c+XZVa!#LuaB
+zkAVJUTq>&-^+=~{Mf?;KOWc|=jcUOtpQ7<&q!p=eV`Lp_%y<UvjLh2#-kG{m5$Kq0
+iR9MD??of|*xb8@s9*$M>OCKv-jumujuqYPUV*U@SO^wU|
+
+literal 0
+HcmV?d00001
+
+diff --git a/backend/app/schemas/tuning_case.py b/backend/app/schemas/tuning_case.py
+new file mode 100644
+index 0000000..19dd675
+--- /dev/null
++++ b/backend/app/schemas/tuning_case.py
+@@ -0,0 +1,46 @@
++from datetime import datetime
++from typing import Optional, List
++from pydantic import BaseModel, ConfigDict
++
++
++class PlanRead(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++    id: int
++    phase: str
++    plan_hash: Optional[str] = None
++    plan_text: str
++    cost: Optional[int] = None
++    elapsed_ms: Optional[int] = None
++    buffers: Optional[int] = None
++    note: Optional[str] = None
++
++
++class BindVariableRead(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++    id: int
++    name: str
++    data_type: str
++    value: Optional[str] = None
++    position: Optional[int] = None
++
++
++class TuningCaseSummary(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++    id: int
++    title: Optional[str] = None
++    category: Optional[str] = None
++    sql_id: Optional[str] = None
++    schema_name: Optional[str] = None
++    instance_name: Optional[str] = None
++    status: str
++    owner: str
++    source: str
++    created_at: datetime
++
++
++class TuningCaseDetail(TuningCaseSummary):
++    sql_text: str
++    tuned_sql_text: Optional[str] = None
++    rationale: Optional[str] = None
++    plans: List[PlanRead] = []
++    bind_variables: List[BindVariableRead] = []
+diff --git a/backend/requirements.txt b/backend/requirements.txt
+new file mode 100644
+index 0000000..e9eceed
+--- /dev/null
++++ b/backend/requirements.txt
+@@ -0,0 +1,13 @@
++fastapi==0.115.0
++uvicorn[standard]==0.32.0
++sqlalchemy==2.0.36
++alembic==1.14.0
++psycopg[binary]==3.2.3
++pgvector==0.3.6
++pydantic==2.9.2
++pydantic-settings==2.6.1
++python-jose[cryptography]==3.3.0
++passlib[bcrypt]==1.7.4
++python-multipart==0.0.9
++fastapi-users[sqlalchemy]==13.0.0
++oracledb==2.5.0
+diff --git a/backend/scripts/seed.py b/backend/scripts/seed.py
+new file mode 100644
+index 0000000..cd9b540
+--- /dev/null
++++ b/backend/scripts/seed.py
+@@ -0,0 +1,366 @@
++"""Seed: 실습 스크립트 3건 + 기존 mock planChange 5건."""
++from __future__ import annotations
++
++from app.db.session import SessionLocal
++from app.models import TuningCase, Plan, BindVariable
++
++
++PRACTICE_CASES = [
++    dict(
++        title="스칼라 서브쿼리 → OUTER JOIN 변환",
++        category="scalar_subquery",
++        sql_id="0z4dm0y82gn7r",
++        schema_name="EXEM",
++        instance_name="EDU-DB",
++        status="approval_pending",
++        owner="ai",
++        source="manual",
++        sql_text="""SELECT /*+ FULL(o) */ ORDER_DATE ,
++       O.ORDER_ID,
++       O.PRODUCT_ID,
++       (SELECT /*+ FULL(c) */ C.CUSTOMER_NAME
++          FROM CUSTOMERS C
++         WHERE C.CUSTOMER_ID = O.CUSTOMER_ID)
++FROM   ORDERS O
++WHERE  ORDER_DATE > '20200101'""",
++        tuned_sql_text="""SELECT /*+ FULL(o) */ o.order_date,
++       o.order_id,
++       o.product_id,
++       c.customer_name
++FROM   orders o
++LEFT OUTER JOIN (
++        SELECT /*+ FULL(c) */ customer_name, customer_id
++        FROM customers c
++) c
++ON o.customer_id = c.customer_id
++WHERE  o.order_date > '20200101'""",
++        rationale="스칼라 서브쿼리는 행마다 CUSTOMERS를 재조회(946K Starts, 35M Buffers, 3분 22초)로 병목. OUTER JOIN으로 풀면 CUSTOMERS 1회 FULL 스캔 + HASH JOIN RIGHT OUTER로 650ms로 단축.",
++        plans=[
++            dict(phase="before", plan_hash="2376761950", elapsed_ms=202360, buffers=35000000,
++                 plan_text="""Plan hash value: 2376761950
++-----------------------------------------------------------------------------------------
++| Id  | Operation         | Name      | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
++-----------------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT  |           |      1 |        |    997K|00:00:00.97 |   44398 |
++|*  1 |  TABLE ACCESS FULL| CUSTOMERS |    946K|      1 |    946K|00:03:22.36 |      35M|
++|*  2 |  TABLE ACCESS FULL| ORDERS    |      1 |    842K|    997K|00:00:00.97 |   44398 |
++-----------------------------------------------------------------------------------------
++Predicate Information:
++   1 - filter("C"."CUSTOMER_ID"=:B1)
++   2 - filter("ORDER_DATE">'20200101')"""),
++            dict(phase="after", plan_hash="2105385677", elapsed_ms=650, buffers=44436,
++                 plan_text="""Plan hash value: 2105385677
++------------------------------------------------------------------------------------------------------------------------
++| Id  | Operation             | Name      | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
++------------------------------------------------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT      |           |      1 |        |    997K|00:00:00.65 |   44436 |       |       |          |
++|*  1 |  HASH JOIN RIGHT OUTER|           |      1 |    842K|    997K|00:00:00.65 |   44436 |  1757K|  1757K| 1707K (0)|
++|   2 |   TABLE ACCESS FULL   | CUSTOMERS |      1 |  10000 |  10000 |00:00:00.01 |      38 |       |       |          |
++|*  3 |   TABLE ACCESS FULL   | ORDERS    |      1 |    842K|    997K|00:00:00.23 |   44398 |       |       |          |
++------------------------------------------------------------------------------------------------------------------------
++Predicate Information:
++   1 - access("O"."CUSTOMER_ID"="CUSTOMER_ID")
++   3 - filter("O"."ORDER_DATE">'20200101')"""),
++        ],
++        binds=[dict(name=":B1", data_type="NUMBER", value="1~10000", position=1)],
++    ),
++    dict(
++        title="함수 호출 → 스칼라 서브쿼리 캐싱",
++        category="function_call",
++        sql_id="6vuk9jzjbgp74",
++        schema_name="EXEM",
++        instance_name="EDU-DB",
++        status="approval_pending",
++        owner="ai",
++        source="manual",
++        sql_text="""SELECT * FROM (
++   SELECT ORDER_DATE ,
++       GET_ORDER_DETAIL(O.ORDER_TYPE),
++       O.ORDER_ID,
++       O.PRODUCT_ID,
++       rownum
++   FROM ORDERS O
++   WHERE ORDER_DATE > '20200101'
++)
++WHERE rownum < 10000
++ORDER BY 2 DESC""",
++        tuned_sql_text="""SELECT * FROM (
++   SELECT ORDER_DATE ,
++       (SELECT GET_ORDER_DETAIL(O.ORDER_TYPE) FROM DUAL),
++       O.ORDER_ID,
++       O.PRODUCT_ID,
++       rownum
++   FROM ORDERS O
++   WHERE ORDER_DATE > '20200101'
++)
++WHERE rownum < 10000
++ORDER BY 2 DESC""",
++        rationale="GET_ORDER_DETAIL(0.1초 SLEEP 포함)을 행마다 호출하여 전체 수행 예상 시간 2시간 40분+. ORDER_TYPE은 3종뿐이므로 (SELECT f() FROM DUAL) 형태로 감싸면 Oracle 스칼라 서브쿼리 캐시가 3회만 실제 호출 → 3.16초로 단축.",
++        plans=[
++            dict(phase="before", plan_hash="2876963066", elapsed_ms=3003180, note="50분 수행 후 중단, 9999건 중 2933건만 진행",
++                 plan_text="""Plan hash value: 2876963066
++------------------------------------------------------------------------------------------
++| Id  | Operation             | Name   | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
++------------------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT      |        |      1 |        |      0 |00:00:00.01 |       0 |
++|   1 |  SORT ORDER BY        |        |      1 |   9999 |      0 |00:00:00.01 |       0 |
++|*  2 |   COUNT STOPKEY       |        |      1 |        |   2933 |00:50:03.18 |      17 |
++|   3 |    VIEW               |        |      1 |    842K|   2933 |00:50:03.17 |      17 |
++|   4 |     COUNT             |        |      1 |        |   2934 |00:00:00.02 |      17 |
++|*  5 |      TABLE ACCESS FULL| ORDERS |      1 |    842K|   2934 |00:00:00.01 |      17 |
++------------------------------------------------------------------------------------------
++Predicate Information:
++   2 - filter(ROWNUM<10000)
++   5 - filter("ORDER_DATE">'20200101')"""),
++            dict(phase="after", plan_hash="989011512", elapsed_ms=3160, buffers=49,
++                 plan_text="""Plan hash value: 989011512
++---------------------------------------------------------------------------------------------------------------------
++| Id  | Operation             | Name   | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
++---------------------------------------------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT      |        |      1 |        |   9999 |00:00:03.16 |      49 |       |       |          |
++|   1 |  FAST DUAL            |        |      3 |      1 |      3 |00:00:00.01 |       0 |       |       |          |
++|   2 |  SORT ORDER BY        |        |      1 |   9999 |   9999 |00:00:03.16 |      49 |   877K|   519K|  779K (0)|
++|*  3 |   COUNT STOPKEY       |        |      1 |        |   9999 |00:00:03.14 |      49 |       |       |          |
++|   4 |    VIEW               |        |      1 |    842K|   9999 |00:00:03.13 |      49 |       |       |          |
++|   5 |     COUNT             |        |      1 |        |   9999 |00:00:00.02 |      49 |       |       |          |
++|*  6 |      TABLE ACCESS FULL| ORDERS |      1 |    842K|   9999 |00:00:00.01 |      49 |       |       |          |
++---------------------------------------------------------------------------------------------------------------------
++Predicate Information:
++   3 - filter(ROWNUM<10000)
++   6 - filter("ORDER_DATE">'20200101')"""),
++        ],
++        binds=[],
++    ),
++    dict(
++        title="OR 조건 → USE_CONCAT 인덱스 분리",
++        category="or_predicate",
++        sql_id=None,
++        schema_name="EXEM",
++        instance_name="EDU-DB",
++        status="approval_pending",
++        owner="ai",
++        source="manual",
++        sql_text="""SELECT customer_id, product_id
++FROM orders
++WHERE customer_id = 230
++   OR product_id = 231""",
++        tuned_sql_text="""SELECT /*+ USE_CONCAT(O) */ customer_id, product_id
++FROM orders O
++WHERE customer_id = 230
++   OR product_id = 231""",
++        rationale="OR 조건은 옵티마이저가 단일 인덱스를 고르기 어려워 ORDERS FULL(76,740 buffers)로 수행됨. USE_CONCAT 힌트로 UNION-ALL 분할 후 EXEM_ORDERS1/EXEM_ORDERS2 INDEX RANGE SCAN(899 buffers)로 처리 → 85배 IO 감소.",
++        plans=[
++            dict(phase="before", plan_hash="1275100350", elapsed_ms=820, buffers=76740,
++                 plan_text="""Plan hash value: 1275100350
++--------------------------------------------------------------------------------------
++| Id  | Operation         | Name   | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
++--------------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT  |        |      1 |        |  21000 |00:00:00.82 |   76740 |
++|*  1 |  TABLE ACCESS FULL| ORDERS |      1 |  16286 |  21000 |00:00:00.82 |   76740 |
++--------------------------------------------------------------------------------------"""),
++            dict(phase="after", plan_hash="354788250", elapsed_ms=120, buffers=899,
++                 plan_text="""Plan hash value: 354788250
++------------------------------------------------------------------------------------------------
++| Id  | Operation          | Name            | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
++------------------------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT   |                 |      1 |        |  21000 |00:00:00.12 |     899 |
++|   1 |  VIEW              | VW_ORE_72AE2D8F |      1 |  17286 |  21000 |00:00:00.12 |     899 |
++|   2 |   UNION-ALL        |                 |      1 |        |  21000 |00:00:00.08 |     899 |
++|*  3 |    INDEX RANGE SCAN| EXEM_ORDERS1    |      1 |   1000 |   1000 |00:00:00.01 |      46 |
++|*  4 |    INDEX RANGE SCAN| EXEM_ORDERS2    |      1 |  16286 |  20000 |00:00:00.02 |     853 |
++------------------------------------------------------------------------------------------------"""),
++        ],
++        binds=[],
++    ),
++]
++
++
++MOCK_CASES = [
++    dict(
++        title="ORDERS-CUSTOMERS 조인 플랜 악화",
++        category="plan_regression",
++        sql_id="abc123def456",
++        schema_name="APP",
++        instance_name="PROD-DB1",
++        status="approval_pending",
++        owner="human",
++        source="maxgauge",
++        sql_text="""SELECT o.order_id, o.order_date, c.customer_name, o.total_amount
++FROM ORDERS o
++JOIN CUSTOMERS c ON o.customer_id = c.customer_id
++WHERE o.order_date BETWEEN :start_dt AND :end_dt
++ORDER BY o.order_date DESC""",
++        rationale="플랜 해시 38291742 → 19283746 전환 이후 420ms → 3240ms(671%) 악화. 통계 재수집 또는 SPM 고정 후보.",
++        plans=[
++            dict(phase="before", plan_hash="38291742", elapsed_ms=420,
++                 plan_text="""Plan hash value: 38291742
++------------------------------------------------------------------
++| Id | Operation                     | Name         | Rows | Cost |
++------------------------------------------------------------------
++|  0 | SELECT STATEMENT              |              |  500 |  125 |
++|  1 |  SORT ORDER BY                |              |  500 |  125 |
++|  2 |   NESTED LOOPS                |              |  500 |   98 |
++|  3 |    INDEX RANGE SCAN           | IDX_ORD_DATE |  500 |   12 |
++|  4 |    TABLE ACCESS BY INDEX ROWID| CUSTOMERS    |    1 |    1 |
++------------------------------------------------------------------"""),
++            dict(phase="after", plan_hash="19283746", elapsed_ms=3240,
++                 plan_text="""Plan hash value: 19283746
++------------------------------------------------------------------
++| Id | Operation           | Name      | Rows  | Cost |
++------------------------------------------------------------------
++|  0 | SELECT STATEMENT    |           |  500  | 8912 |
++|  1 |  SORT ORDER BY      |           |  500  | 8912 |
++|  2 |   HASH JOIN         |           |  500  | 8901 |
++|  3 |    TABLE ACCESS FULL| CUSTOMERS | 100K  |  412 |
++|  4 |    TABLE ACCESS FULL| ORDERS    | 2M    | 8478 |
++------------------------------------------------------------------"""),
++        ],
++        binds=[
++            dict(name=":start_dt", data_type="DATE", value="2026-04-01", position=1),
++            dict(name=":end_dt",   data_type="DATE", value="2026-04-03", position=2),
++        ],
++    ),
++    dict(
++        title="EMPLOYEES 급여/입사일 필터",
++        category="plan_regression",
++        sql_id="def456ghi789",
++        schema_name="HR",
++        instance_name="PROD-DB2",
++        status="approval_pending",
++        owner="human",
++        source="awr",
++        sql_text="""SELECT e.employee_id, e.first_name, e.last_name, d.department_name
++FROM EMPLOYEES e
++JOIN DEPARTMENTS d ON e.department_id = d.department_id
++WHERE e.salary > :min_salary
++AND e.hire_date > :cutoff_date""",
++        rationale="BIND 편향으로 플랜이 NL→HASH로 전환. 적응적 플랜/SQL Profile 검토 필요.",
++        plans=[
++            dict(phase="before", plan_hash="AA000001", elapsed_ms=150,
++                 plan_text="""Plan hash value: AA000001
++------------------------------------------
++| Id | Operation | Rows | Cost |
++------------------------------------------
++| 0  | SELECT    |   50 |   18 |
++| 1  | NESTED LOOP |  50 |   18 |
++------------------------------------------"""),
++            dict(phase="after", plan_hash="AA000002", elapsed_ms=890,
++                 plan_text="""Plan hash value: AA000002
++------------------------------------------
++| Id | Operation | Rows | Cost |
++------------------------------------------
++| 0  | SELECT    |  50K |  512 |
++| 1  | HASH JOIN | 50K  |  512 |
++------------------------------------------"""),
++        ],
++        binds=[
++            dict(name=":min_salary",  data_type="NUMBER", value="5000",       position=1),
++            dict(name=":cutoff_date", data_type="DATE",   value="2024-01-01", position=2),
++        ],
++    ),
++    dict(
++        title="ACCOUNTS 잔액 합산",
++        category="plan_regression",
++        sql_id="ghi789jkl012",
++        schema_name="FIN",
++        instance_name="PROD-DB1",
++        status="apply_pending",
++        owner="human",
++        source="vsql",
++        sql_text="""SELECT a.account_no, a.balance, SUM(t.amount) total_txn
++FROM ACCOUNTS a
++LEFT JOIN TRANSACTIONS t ON a.account_id = t.account_id
++WHERE a.status = :status
++GROUP BY a.account_no, a.balance""",
++        rationale="GROUP BY HASH 플랜으로 전환 후 버퍼 사용량 급증. 인덱스 힌트 또는 파티션 프루닝 후보.",
++        plans=[
++            dict(phase="before", plan_hash="BB000001", elapsed_ms=310,
++                 plan_text="Plan hash value: BB000001\nNESTED LOOPS + SORT GROUP BY"),
++            dict(phase="after", plan_hash="BB000002", elapsed_ms=1820,
++                 plan_text="Plan hash value: BB000002\nHASH JOIN + HASH GROUP BY"),
++        ],
++        binds=[dict(name=":status", data_type="VARCHAR2", value="ACTIVE", position=1)],
++    ),
++    dict(
++        title="PRODUCTS 일별 판매 집계",
++        category="plan_regression",
++        sql_id="jkl012mno345",
++        schema_name="SALES",
++        instance_name="PROD-DB3",
++        status="approval_pending",
++        owner="ai",
++        source="awr",
++        sql_text="""SELECT p.product_id, p.product_name, SUM(oi.quantity) total_qty
++FROM PRODUCTS p
++JOIN ORDER_ITEMS oi ON p.product_id = oi.product_id
++JOIN ORDERS o ON oi.order_id = o.order_id
++WHERE o.order_date >= TRUNC(SYSDATE) - 30
++GROUP BY p.product_id, p.product_name
++ORDER BY total_qty DESC""",
++        rationale="PRODUCTS-ORDER_ITEMS-ORDERS 3테이블 조인에서 조인 순서 변경으로 30일치 스캔 비용 증가.",
++        plans=[
++            dict(phase="before", plan_hash="CC000001", elapsed_ms=480,
++                 plan_text="Plan hash value: CC000001\nHASH JOIN optimal order"),
++            dict(phase="after", plan_hash="CC000002", elapsed_ms=2760,
++                 plan_text="Plan hash value: CC000002\nHASH JOIN swapped driving table"),
++        ],
++        binds=[],
++    ),
++    dict(
++        title="EMPLOYEES 매니저 self-join",
++        category="plan_regression",
++        sql_id="mno345pqr678",
++        schema_name="HR",
++        instance_name="PROD-DB2",
++        status="applied",
++        owner="done",
++        source="manual",
++        sql_text="""SELECT e.employee_id, e.first_name, m.first_name manager_name, d.department_name
++FROM EMPLOYEES e
++LEFT JOIN EMPLOYEES m ON e.manager_id = m.employee_id
++JOIN DEPARTMENTS d ON e.department_id = d.department_id
++WHERE d.location_id = :loc_id""",
++        rationale="self-join에서 OUTER 순서 변경 필요. SPM으로 기존 플랜 고정 완료.",
++        plans=[
++            dict(phase="before", plan_hash="DD000001", elapsed_ms=560,
++                 plan_text="Plan hash value: DD000001\nBAD self-join order"),
++            dict(phase="after", plan_hash="DD000002", elapsed_ms=180,
++                 plan_text="Plan hash value: DD000002\nGOOD self-join order via SPM"),
++        ],
++        binds=[dict(name=":loc_id", data_type="NUMBER", value="1700", position=1)],
++    ),
++]
++
++
++def seed():
++    db = SessionLocal()
++    try:
++        # 멱등: 기존 전부 삭제 후 재삽입
++        db.query(BindVariable).delete()
++        db.query(Plan).delete()
++        db.query(TuningCase).delete()
++        db.commit()
++
++        all_cases = PRACTICE_CASES + MOCK_CASES
++        for c in all_cases:
++            plans = c.pop("plans", [])
++            binds = c.pop("binds", [])
++            case = TuningCase(**c)
++            db.add(case)
++            db.flush()
++            for p in plans:
++                db.add(Plan(case_id=case.id, **p))
++            for i, b in enumerate(binds, start=1):
++                b.setdefault("position", i)
++                db.add(BindVariable(case_id=case.id, **b))
++        db.commit()
++        n_cases = db.query(TuningCase).count()
++        n_plans = db.query(Plan).count()
++        n_binds = db.query(BindVariable).count()
++        print(f"seeded: cases={n_cases}, plans={n_plans}, binds={n_binds}")
++    finally:
++        db.close()
++
++
++if __name__ == "__main__":
++    seed()
+diff --git a/backend/scripts/seed_candidates.py b/backend/scripts/seed_candidates.py
+new file mode 100644
+index 0000000..d788bc0
+--- /dev/null
++++ b/backend/scripts/seed_candidates.py
+@@ -0,0 +1,142 @@
++"""추가 mock SQL (candidates.ts) as-is plan만 저장. 기존 데이터는 유지."""
++from __future__ import annotations
++
++from app.db.session import SessionLocal
++from app.models import TuningCase, Plan, BindVariable
++
++
++CANDIDATE_CASES = [
++    dict(
++        title="EMP 고연봉 최근입사자 조회",
++        category="top_sql_candidate",
++        sql_id="abc1234567890",
++        schema_name="HR",
++        instance_name="PROD-DB2",
++        status="pending",
++        owner="ai",
++        source="maxgauge",
++        sql_text="""SELECT e.emp_id, e.salary, d.dept_name
++FROM EMP e
++JOIN DEPT d ON e.dept_id = d.dept_id
++WHERE e.hire_date >= ADD_MONTHS(SYSDATE, -12)
++ORDER BY e.salary DESC""",
++        rationale="최근 1년 입사자 조회. EMP FULL SCAN + HASH JOIN 후 SORT. hire_date 인덱스 활용 여지 분석 필요.",
++        plans=[
++            dict(phase="before", plan_hash="3821104567", elapsed_ms=1240, buffers=18520,
++                 plan_text="""Plan hash value: 3821104567
++-----------------------------------------------------------------------------
++| Id  | Operation              | Name   | Rows  | Bytes | Cost (%CPU)| Time |
++-----------------------------------------------------------------------------
++|   0 | SELECT STATEMENT       |        |  8200 |   520K|  412   (2) | 00:00:01 |
++|   1 |  SORT ORDER BY         |        |  8200 |   520K|  412   (2) | 00:00:01 |
++|*  2 |   HASH JOIN            |        |  8200 |   520K|  398   (1) | 00:00:01 |
++|   3 |    TABLE ACCESS FULL   | DEPT   |   120 |  2400 |    3   (0) | 00:00:01 |
++|*  4 |    TABLE ACCESS FULL   | EMP    |  8200 |   360K|  394   (1) | 00:00:01 |
++-----------------------------------------------------------------------------
++Predicate Information:
++   2 - access("E"."DEPT_ID"="D"."DEPT_ID")
++   4 - filter("E"."HIRE_DATE">=ADD_MONTHS(SYSDATE@!,-12))"""),
++        ],
++        binds=[],
++    ),
++    dict(
++        title="고객별 YTD 주문금액 집계",
++        category="top_sql_candidate",
++        sql_id="def9876543210",
++        schema_name="SALES",
++        instance_name="PROD-DB1",
++        status="pending",
++        owner="ai",
++        source="awr",
++        sql_text="""SELECT c.cust_id, c.cust_name, SUM(o.total_amount) ytd
++FROM CUSTOMERS c
++LEFT JOIN ORDERS o ON c.cust_id = o.customer_id
++WHERE o.order_date >= TRUNC(SYSDATE, 'YYYY')
++GROUP BY c.cust_id, c.cust_name""",
++        rationale="LEFT JOIN + WHERE 절의 join 대상 필터로 OUTER 의미가 무력화됨(INNER로 해석). YTD 파티션 프루닝 여부 확인 필요.",
++        plans=[
++            dict(phase="before", plan_hash="1924857613", elapsed_ms=5420, buffers=124800,
++                 plan_text="""Plan hash value: 1924857613
++---------------------------------------------------------------------------------
++| Id  | Operation               | Name      | Rows | Bytes | Cost (%CPU)| Time  |
++---------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT        |           |  45K | 3520K | 2310  (3)  | 00:00:28 |
++|   1 |  HASH GROUP BY          |           |  45K | 3520K | 2310  (3)  | 00:00:28 |
++|*  2 |   HASH JOIN             |           |  82K | 6400K | 2287  (2)  | 00:00:28 |
++|   3 |    TABLE ACCESS FULL    | CUSTOMERS |  50K | 1200K |  128  (1)  | 00:00:02 |
++|*  4 |    TABLE ACCESS FULL    | ORDERS    |  82K | 4800K | 2152  (2)  | 00:00:26 |
++---------------------------------------------------------------------------------
++Predicate Information:
++   2 - access("C"."CUST_ID"="O"."CUSTOMER_ID")
++   4 - filter("O"."ORDER_DATE">=TRUNC(SYSDATE@!,'fmyyyy'))"""),
++        ],
++        binds=[],
++    ),
++    dict(
++        title="매장별 당일 매출 집계",
++        category="top_sql_candidate",
++        sql_id="ccc_new_sql_001",
++        schema_name="RETAIL",
++        instance_name="PROD-DB3",
++        status="pending",
++        owner="ai",
++        source="vsql",
++        sql_text="""SELECT s.store_id, s.store_name, SUM(t.sale_amount) total_sales
++FROM STORES s
++JOIN TRANSACTIONS t ON s.store_id = t.store_id
++WHERE t.txn_date >= TRUNC(SYSDATE)
++GROUP BY s.store_id, s.store_name
++ORDER BY total_sales DESC""",
++        rationale="당일 트랜잭션만 필터. TRANSACTIONS 일자 파티션/LOCAL 인덱스 필요 여부 확인.",
++        plans=[
++            dict(phase="before", plan_hash="2651087432", elapsed_ms=920, buffers=8340,
++                 plan_text="""Plan hash value: 2651087432
++----------------------------------------------------------------------------------
++| Id  | Operation                | Name         | Rows | Cost (%CPU)| Pstart| Pstop|
++----------------------------------------------------------------------------------
++|   0 | SELECT STATEMENT         |              | 1200 |  285   (1) |       |      |
++|   1 |  SORT ORDER BY           |              | 1200 |  285   (1) |       |      |
++|   2 |   HASH GROUP BY          |              | 1200 |  285   (1) |       |      |
++|*  3 |    HASH JOIN             |              | 18K  |  279   (1) |       |      |
++|   4 |     TABLE ACCESS FULL    | STORES       | 1200 |    8   (0) |       |      |
++|   5 |     PARTITION RANGE SINGLE|             | 18K  |  270   (1) |  KEY  |  KEY |
++|*  6 |      TABLE ACCESS FULL   | TRANSACTIONS | 18K  |  270   (1) |  KEY  |  KEY |
++----------------------------------------------------------------------------------
++Predicate Information:
++   3 - access("S"."STORE_ID"="T"."STORE_ID")
++   6 - filter("T"."TXN_DATE">=TRUNC(SYSDATE@!))"""),
++        ],
++        binds=[],
++    ),
++]
++
++
++def seed():
++    db = SessionLocal()
++    try:
++        existing = {c.sql_id for c in db.query(TuningCase).filter(TuningCase.sql_id.isnot(None)).all()}
++        added = 0
++        for c in CANDIDATE_CASES:
++            if c["sql_id"] in existing:
++                continue
++            plans = c.pop("plans", [])
++            binds = c.pop("binds", [])
++            case = TuningCase(**c)
++            db.add(case)
++            db.flush()
++            for p in plans:
++                db.add(Plan(case_id=case.id, **p))
++            for i, b in enumerate(binds, start=1):
++                b.setdefault("position", i)
++                db.add(BindVariable(case_id=case.id, **b))
++            added += 1
++        db.commit()
++        n_cases = db.query(TuningCase).count()
++        n_plans = db.query(Plan).count()
++        print(f"added {added} candidate cases. total: cases={n_cases}, plans={n_plans}")
++    finally:
++        db.close()
++
++
++if __name__ == "__main__":
++    seed()
+diff --git a/src/App.tsx b/src/App.tsx
+index a39967b..264c733 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,6 +1,9 @@
+ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+ import AppLayout from './components/layout/AppLayout'
+ import Dashboard from './pages/Dashboard'
++import CasesDbPage from './pages/db/CasesDbPage'
++import { ObjectInfoProvider } from './components/object-info/ObjectInfoContext'
++import ObjectInfoPanel from './components/object-info/ObjectInfoPanel'
+ import TopSql from './pages/candidates/TopSql'
+ import AnomalyDetection from './pages/candidates/AnomalyDetection'
+ // DirectInput → /canvas redirect (App.tsx route)
+@@ -38,10 +41,12 @@ function App() {
+       <QueueProvider>
+       <WorkDetailPanelProvider>
+       <DirectInputProvider>
++      <ObjectInfoProvider>
+       <Routes>
+         <Route path="/login" element={<Login />} />
+         <Route element={<AppLayout />}>
+           <Route path="/" element={<Dashboard />} />
++          <Route path="/db/cases" element={<CasesDbPage />} />
+           <Route path="/candidates" element={<Navigate to="/candidates/top" replace />} />
+           <Route path="/candidates/preset" element={<PresetAutoTuning />} />
+           <Route element={<CandidatesExploreLayout />}>
+@@ -78,6 +83,8 @@ function App() {
+         </Route>
+         <Route path="/queue" element={<QueueFullView />} />
+       </Routes>
++        <ObjectInfoPanel />
++      </ObjectInfoProvider>
+       </DirectInputProvider>
+       </WorkDetailPanelProvider>
+       </QueueProvider>
+diff --git a/src/components/object-info/ObjectInfoContext.tsx b/src/components/object-info/ObjectInfoContext.tsx
+new file mode 100644
+index 0000000..358805d
+--- /dev/null
++++ b/src/components/object-info/ObjectInfoContext.tsx
+@@ -0,0 +1,108 @@
++import {
++  createContext, useContext, useState, useCallback, useEffect, useRef,
++  type ReactNode,
++} from 'react'
++import { buildAliasMap, resolveTerm } from '../../lib/object-info/aliasResolver'
++import type { AliasMap } from '../../lib/object-info'
++
++interface OpenPayload {
++  sql: string
++  term: string
++}
++
++interface ObjectInfoCtx {
++  isOpen: boolean
++  collapsed: boolean
++  sql: string
++  term: string
++  aliasMap: AliasMap
++  resolved: string | null
++  open: (p: OpenPayload) => void
++  close: () => void
++  toggleCollapsed: () => void
++  setActiveSql: (sql: string | null, el?: HTMLElement | null) => void
++}
++
++const Ctx = createContext<ObjectInfoCtx | null>(null)
++
++export function useObjectInfo() {
++  const v = useContext(Ctx)
++  if (!v) throw new Error('ObjectInfoProvider missing')
++  return v
++}
++
++export function ObjectInfoProvider({ children }: { children: ReactNode }) {
++  const [isOpen, setOpen] = useState(false)
++  const [collapsed, setCollapsed] = useState(false)
++  const [sql, setSql] = useState('')
++  const [term, setTerm] = useState('')
++  const [aliasMap, setAliasMap] = useState<AliasMap>({})
++  const [resolved, setResolved] = useState<string | null>(null)
++  const activeSqlRef = useRef<string | null>(null)
++
++  const open = useCallback(({ sql, term }: OpenPayload) => {
++    const am = buildAliasMap(sql)
++    const r = resolveTerm(term, am)
++    setSql(sql)
++    setTerm(term)
++    setAliasMap(am)
++    setResolved(r)
++    setCollapsed(false)
++    setOpen(true)
++  }, [])
++
++  const close = useCallback(() => setOpen(false), [])
++  const toggleCollapsed = useCallback(() => setCollapsed(c => !c), [])
++
++  // 전역 단축키: F5 = 열기, Esc = 닫기
++  useEffect(() => {
++    function onKey(e: KeyboardEvent) {
++      if (e.key === 'Escape' && isOpen) { close(); return }
++      if (e.key !== 'F5') return
++      const sel = window.getSelection()
++      if (!sel || sel.rangeCount === 0) return
++      const picked = sel.toString().trim()
++      if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(picked)) return
++
++      let activeSql: string | null = activeSqlRef.current
++      const anchor = sel.anchorNode
++      const selEl = anchor instanceof Element ? anchor : anchor?.parentElement ?? null
++      if (!activeSql && selEl) {
++        const srcEl = selEl.closest('[data-sql-source]') as HTMLElement | null
++        if (srcEl && srcEl.dataset.sqlSource) activeSql = srcEl.dataset.sqlSource
++        else {
++          const pre = selEl.closest('pre')
++          if (pre) activeSql = pre.textContent ?? null
++        }
++      }
++      if (!activeSql) return
++      e.preventDefault()
++      open({ sql: activeSql, term: picked })
++    }
++    window.addEventListener('keydown', onKey)
++    return () => window.removeEventListener('keydown', onKey)
++  }, [isOpen, open, close])
++
++  // 본문을 오른쪽 공간만큼 밀어서 겹침 방지
++  useEffect(() => {
++    const cls = isOpen && !collapsed ? 'object-info-open' : isOpen && collapsed ? 'object-info-collapsed' : ''
++    document.body.classList.remove('object-info-open', 'object-info-collapsed')
++    if (cls) document.body.classList.add(cls)
++    return () => {
++      document.body.classList.remove('object-info-open', 'object-info-collapsed')
++    }
++  }, [isOpen, collapsed])
++
++  const setActiveSql = useCallback((sql: string | null, _el?: HTMLElement | null) => {
++    activeSqlRef.current = sql
++  }, [])
++
++  return (
++    <Ctx.Provider value={{
++      isOpen, collapsed, sql, term, aliasMap, resolved,
++      open, close, toggleCollapsed, setActiveSql,
++    }}>
++      {children}
++    </Ctx.Provider>
++  )
++}
+diff --git a/src/components/object-info/ObjectInfoPanel.tsx b/src/components/object-info/ObjectInfoPanel.tsx
+new file mode 100644
+index 0000000..6a79a42
+--- /dev/null
++++ b/src/components/object-info/ObjectInfoPanel.tsx
+@@ -0,0 +1,263 @@
++import { useMemo, useState } from 'react'
++import { useObjectInfo } from './ObjectInfoContext'
++import { getObjectMeta } from '../../lib/object-info/objectMeta'
++import { buildSyntheticMeta } from '../../lib/object-info/syntheticMeta'
++import { findPredicatesForObject } from '../../lib/object-info/sqlHighlight'
++import type { ObjectMeta, IndexMeta, PredicateRef } from '../../lib/object-info'
++
++export const OBJECT_INFO_WIDTH = 640
++export const OBJECT_INFO_COLLAPSED = 36
++
++function fmtNum(n: number | null | undefined): string {
++  if (n == null) return '-'
++  return n.toLocaleString()
++}
++
++function planBadge(ix: IndexMeta) {
++  const u = (ix.planUsage || '').toUpperCase()
++  if (!u) return null
++  const asisCls = 'px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-700'
++  const tobeCls = 'px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-100 text-sky-700'
++  const newCls  = 'px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700'
++  return (
++    <span className="inline-flex gap-1 ml-2">
++      {(u === 'ASIS' || u === 'BOTH') && <span className={asisCls} title="현재 플랜">AS-IS</span>}
++      {(u === 'TOBE' || u === 'BOTH') && <span className={tobeCls} title="튜닝 후 플랜">TO-BE</span>}
++      {ix.isNew && <span className={newCls} title="신규 생성 제안">NEW</span>}
++    </span>
++  )
++}
++
++function rowClass(ix: IndexMeta): string {
++  const u = (ix.planUsage || '').toUpperCase()
++  if (u === 'BOTH') return 'bg-gradient-to-r from-slate-50 to-sky-50'
++  if (u === 'ASIS') return 'bg-slate-50'
++  if (u === 'TOBE') return 'bg-sky-50'
++  return ''
++}
++
++export default function ObjectInfoPanel() {
++  const { isOpen, collapsed, sql, term, aliasMap, resolved, close, toggleCollapsed } = useObjectInfo()
++  const [colTerm, setColTerm] = useState<string>('')
++
++  const meta: ObjectMeta | null = useMemo(() => {
++    const key = resolved || term
++    if (!key) return null
++    const catalog = getObjectMeta(key)
++    if (catalog) return catalog
++    return buildSyntheticMeta(sql, key, aliasMap)
++  }, [resolved, term, sql, aliasMap])
++
++  const preds: PredicateRef[] = useMemo(() => {
++    const key = resolved || term
++    if (!key) return []
++    return findPredicatesForObject(sql, key, aliasMap, meta?.columns?.map((c) => c.name))
++  }, [sql, resolved, term, aliasMap, meta])
++
++  if (!isOpen) return null
++
++  const width = collapsed ? OBJECT_INFO_COLLAPSED : OBJECT_INFO_WIDTH
++  const outerStyle: React.CSSProperties = {
++    position: 'fixed',
++    top: 0,
++    right: 0,
++    bottom: 0,
++    width,
++    zIndex: 70,
++    transition: 'width 200ms ease-out',
++  }
++
++  if (collapsed) {
++    // 접힌 상태 — 얇은 수직 탭만 표시, 클릭해 펼침
++    return (
++      <div
++        style={outerStyle}
++        className="bg-sky-600 text-white border-l border-sky-700 shadow-xl flex items-start justify-center cursor-pointer hover:bg-sky-700"
++        onClick={toggleCollapsed}
++        title="Object Info 펼치기"
++      >
++        <div className="py-6 [writing-mode:vertical-rl] rotate-180 text-xs font-semibold tracking-widest">
++          ◀ OBJECT INFO
++        </div>
++      </div>
++    )
++  }
++
++  const sortedIndexes = meta
++    ? meta.indexes.slice().sort((a, b) => {
++        const rank = (x: IndexMeta) => {
++          const u = (x.planUsage || '').toUpperCase()
++          if (u === 'BOTH') return 0
++          if (u === 'ASIS') return 1
++          if (u === 'TOBE') return 2
++          return 3
++        }
++        return rank(a) - rank(b)
++      })
++    : []
++
++  const hitCol = (name: string) => colTerm && name.toLowerCase() === colTerm.toLowerCase()
++
++  return (
++    <div
++      style={outerStyle}
++      className="bg-white shadow-2xl border-l border-slate-200 flex flex-col"
++      onMouseUp={() => {
++        const sel = window.getSelection()
++        if (!sel || sel.rangeCount === 0) return
++        const picked = sel.toString().trim()
++        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked)) return
++        setColTerm(picked)
++      }}
++    >
++      <header className="px-4 py-3 border-b border-slate-200 flex items-start justify-between gap-3">
++        <div className="min-w-0 flex-1">
++          <div className="text-[11px] text-slate-500">
++            Selected term: <code className="font-mono">{term}</code>
++            {resolved && <> → <code className="font-mono text-slate-800">{resolved}</code></>}
++          </div>
++          <h3 className="text-base font-semibold text-slate-900 mt-0.5 truncate">
++            {meta ? `${meta.schema}.${meta.name}` : `Object: ${resolved ?? '(unknown)'}`}
++          </h3>
++          {meta && (
++            <div className="mt-1 text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
++              <span>Type <code className="text-slate-700">{meta.type}</code></span>
++              <span>Rows <code className="text-slate-700">{fmtNum(meta.totalRows)}</code></span>
++              <span>Avg <code className="text-slate-700">{meta.avgRowBytes != null ? `${fmtNum(meta.avgRowBytes)} B` : '-'}</code></span>
++              <span>Analyzed <code className="text-slate-700">{meta.lastAnalyzed ?? '-'}</code></span>
++            </div>
++          )}
++          {meta?.note && <div className="mt-1 text-xs text-amber-700">{meta.note}</div>}
++        </div>
++        <div className="flex items-center gap-1 shrink-0">
++          <button
++            onClick={toggleCollapsed}
++            className="px-2 py-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded text-sm"
++            title="접기"
++          >
++            ▶
++          </button>
++          <button
++            onClick={close}
++            className="px-2 py-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded"
++            aria-label="닫기"
++            title="닫기 (Esc)"
++          >
++            ✕
++          </button>
++        </div>
++      </header>
++
++      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 text-sm">
++        <section>
++          <h4 className="text-xs font-semibold text-slate-500 mb-2">
++            Related Predicates <span className="text-slate-400">(WHERE / ON / HAVING)</span>
++          </h4>
++          {preds.length === 0 ? (
++            <div className="text-xs text-slate-400">해당 오브젝트를 참조하는 조건절이 없습니다.</div>
++          ) : (
++            <div className="space-y-1">
++              {preds.map((p, i) => (
++                <div key={i} className="flex gap-2 text-xs">
++                  <span className="px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 font-semibold min-w-[50px] text-center">
++                    {p.clause}
++                  </span>
++                  <code className="font-mono text-slate-700 flex-1 break-all">{p.text}</code>
++                </div>
++              ))}
++            </div>
++          )}
++        </section>
++
++        <section>
++          <div className="flex items-center justify-between mb-2">
++            <h4 className="text-xs font-semibold text-slate-500">Columns</h4>
++            {colTerm && (
++              <button
++                onClick={() => setColTerm('')}
++                className="text-[11px] text-slate-500 hover:text-slate-900"
++              >
++                해제 <code>{colTerm}</code> ✕
++              </button>
++            )}
++          </div>
++          {meta && meta.columns.length ? (
++            <table className="w-full text-xs border border-slate-200 rounded overflow-hidden">
++              <thead className="bg-slate-50 text-slate-600">
++                <tr>
++                  <th className="text-right px-2 py-1 w-8">#</th>
++                  <th className="text-left  px-2 py-1">Column</th>
++                  <th className="text-left  px-2 py-1">Type</th>
++                  <th className="text-left  px-2 py-1 w-14">Null</th>
++                  <th className="text-right px-2 py-1 w-20">Distinct</th>
++                </tr>
++              </thead>
++              <tbody>
++                {meta.columns.map((c, i) => (
++                  <tr
++                    key={c.name}
++                    className={`border-t border-slate-100 cursor-pointer hover:bg-sky-50 ${hitCol(c.name) ? 'bg-amber-50' : ''}`}
++                    onClick={() => setColTerm(c.name)}
++                  >
++                    <td className="text-right px-2 py-1 text-slate-400">{i + 1}</td>
++                    <td className="px-2 py-1 font-mono text-slate-800">{c.name}</td>
++                    <td className="px-2 py-1 text-slate-600">{c.type}</td>
++                    <td className={`px-2 py-1 ${c.nullable ? 'text-amber-600' : 'text-slate-400'}`}>{c.nullable ? 'YES' : 'NO'}</td>
++                    <td className="text-right px-2 py-1 text-slate-600">{fmtNum(c.distinct)}</td>
++                  </tr>
++                ))}
++              </tbody>
++            </table>
++          ) : null}
++        </section>
++
++        <section>
++          <h4 className="text-xs font-semibold text-slate-500 mb-2">
++            Indexes <span className="text-[10px] text-slate-400">(AS-IS 현행 · TO-BE 제안)</span>
++          </h4>
++          {meta && sortedIndexes.length ? (
++            <table className="w-full text-xs border border-slate-200 rounded overflow-hidden">
++              <thead className="bg-slate-50 text-slate-600">
++                <tr>
++                  <th className="text-left px-2 py-1">Index</th>
++                  <th className="text-left px-2 py-1 w-16">Type</th>
++                  <th className="text-left px-2 py-1">Columns</th>
++                </tr>
++              </thead>
++              <tbody>
++                {sortedIndexes.map((ix) => (
++                  <tr key={ix.name} className={`border-t border-slate-100 ${rowClass(ix)}`} title={ix.rationale}>
++                    <td className="px-2 py-1">
++                      <div className="font-mono text-slate-800 break-all">{ix.name}</div>
++                      {planBadge(ix)}
++                    </td>
++                    <td className="px-2 py-1 text-slate-600">{ix.type}</td>
++                    <td className="px-2 py-1">
++                      {ix.columns.map((col) => (
++                        <code
++                          key={col}
++                          onClick={(e) => { e.stopPropagation(); setColTerm(col) }}
++                          className={`inline-block cursor-pointer px-1.5 py-0.5 mr-1 mb-0.5 rounded font-mono ${
++                            hitCol(col)
++                              ? 'bg-amber-200 text-amber-900'
++                              : 'bg-slate-100 text-slate-700 hover:bg-sky-100'
++                          }`}
++                        >
++                          {col}
++                        </code>
++                      ))}
++                    </td>
++                  </tr>
++                ))}
++              </tbody>
++            </table>
++          ) : null}
++        </section>
++
++        <div className="text-[11px] text-slate-400 pt-2 border-t border-slate-100">
++          💡 <kbd>Esc</kbd> 닫기 · ▶ 버튼으로 접기
++        </div>
++      </div>
++    </div>
++  )
++}
+diff --git a/src/components/object-info/SqlBlock.tsx b/src/components/object-info/SqlBlock.tsx
+new file mode 100644
+index 0000000..a57097c
+--- /dev/null
++++ b/src/components/object-info/SqlBlock.tsx
+@@ -0,0 +1,48 @@
++import { useEffect, useRef, type ReactNode } from 'react'
++import { useObjectInfo } from './ObjectInfoContext'
++
++interface Props {
++  sql: string
++  children?: ReactNode
++  className?: string
++}
++
++/**
++ * SQL 블록을 감싸는 wrapper.
++ * - 내부에서 텍스트를 선택하면 현재 활성 SQL로 등록됨
++ * - 이후 F5를 누르면 Object Info 패널이 열림
++ * - children 미지정 시 SQL을 pre 태그로 렌더
++ */
++export default function SqlBlock({ sql, children, className }: Props) {
++  const ref = useRef<HTMLDivElement>(null)
++  const { setActiveSql } = useObjectInfo()
++
++  useEffect(() => {
++    const el = ref.current
++    if (!el) return
++    const onUp = () => {
++      const sel = window.getSelection()
++      if (!sel || sel.rangeCount === 0) return
++      const anchor = sel.anchorNode
++      if (!anchor || !el.contains(anchor)) return
++      setActiveSql(sql)
++    }
++    const onEnter = () => setActiveSql(sql)
++    el.addEventListener('mouseup', onUp)
++    el.addEventListener('mouseenter', onEnter)
++    return () => {
++      el.removeEventListener('mouseup', onUp)
++      el.removeEventListener('mouseenter', onEnter)
++    }
++  }, [sql, setActiveSql])
++
++  return (
++    <div ref={ref} className={className} data-object-info-sql="1" title="드래그 + F5 = Object Info">
++      {children ?? (
++        <pre className="text-xs bg-slate-50 p-3 rounded overflow-x-auto font-mono whitespace-pre">
++{sql}
++        </pre>
++      )}
++    </div>
++  )
++}
+diff --git a/src/index.css b/src/index.css
+index 86e34b4..ca3a4bb 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -276,3 +276,32 @@ body {
+   animation: navSlideOut 300ms cubic-bezier(0.4, 0, 0.2, 1) both !important;
+   transform: translateX(100%);
+ }
++
++
++/* Object Info — 우측 고정 패널 */
++:root {
++  --object-info-w: 640px;
++  --object-info-collapsed-w: 36px;
++}
++body.object-info-open {
++  padding-right: var(--object-info-w);
++  transition: padding-right 200ms ease-out;
++}
++body.object-info-collapsed {
++  padding-right: var(--object-info-collapsed-w);
++  transition: padding-right 200ms ease-out;
++}
++body {
++  transition: padding-right 150ms ease-in;
++}
++/* 기존 우측 fixed 패널(SlidePanel 등)은 right 위치를 옮겨 겹침 방지.
++   SlidePanel 의 Tailwind translate-x 애니메이션과 충돌하지 않음. */
++body.object-info-open .fixed.inset-y-0.right-0 {
++  right: var(--object-info-w) !important;
++}
++body.object-info-collapsed .fixed.inset-y-0.right-0 {
++  right: var(--object-info-collapsed-w) !important;
++}
++.fixed.inset-y-0.right-0 {
++  transition: right 200ms ease-out;
++}
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+new file mode 100644
+index 0000000..1d86453
+--- /dev/null
++++ b/src/lib/api.ts
+@@ -0,0 +1,53 @@
++const BASE = import.meta.env.VITE_API_BASE || 'http://10.10.45.119:8000'
++
++export interface TuningCaseSummary {
++  id: number
++  title: string | null
++  category: string | null
++  sql_id: string | null
++  schema_name: string | null
++  instance_name: string | null
++  status: string
++  owner: string
++  source: string
++  created_at: string
++}
++
++export interface PlanRow {
++  id: number
++  phase: string
++  plan_hash: string | null
++  plan_text: string
++  cost: number | null
++  elapsed_ms: number | null
++  buffers: number | null
++  note: string | null
++}
++
++export interface BindVariable {
++  id: number
++  name: string
++  data_type: string
++  value: string | null
++  position: number | null
++}
++
++export interface TuningCaseDetail extends TuningCaseSummary {
++  sql_text: string
++  tuned_sql_text: string | null
++  rationale: string | null
++  plans: PlanRow[]
++  bind_variables: BindVariable[]
++}
++
++export async function fetchCases(): Promise<TuningCaseSummary[]> {
++  const r = await fetch(`${BASE}/api/cases`)
++  if (!r.ok) throw new Error(`fetchCases failed: ${r.status}`)
++  return r.json()
++}
++
++export async function fetchCase(id: number): Promise<TuningCaseDetail> {
++  const r = await fetch(`${BASE}/api/cases/${id}`)
++  if (!r.ok) throw new Error(`fetchCase failed: ${r.status}`)
++  return r.json()
++}
+diff --git a/src/lib/object-info/aliasResolver.d.ts b/src/lib/object-info/aliasResolver.d.ts
+new file mode 100644
+index 0000000..86c1f9c
+--- /dev/null
++++ b/src/lib/object-info/aliasResolver.d.ts
+@@ -0,0 +1,3 @@
++import type { AliasMap } from './index'
++export function buildAliasMap(sql: string): AliasMap
++export function resolveTerm(term: string, aliasMap: AliasMap): string | null
+diff --git a/src/lib/object-info/aliasResolver.js b/src/lib/object-info/aliasResolver.js
+new file mode 100644
+index 0000000..b97fbb4
+--- /dev/null
++++ b/src/lib/object-info/aliasResolver.js
+@@ -0,0 +1,122 @@
++// Alias resolver — scans a SQL's FROM / JOIN / WITH clauses and returns a map
++// from lowercased alias → object name.
++
++import { tokenize } from "./sqlHighlight"
++
++const STOP_AFTER_TABLE = new Set([
++  "ON", "USING", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "FETCH",
++  "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "CROSS", "FULL", "NATURAL",
++  "UNION", "INTERSECT", "EXCEPT", "MINUS", "SELECT", "FROM", "WITH",
++  "RETURNING",
++])
++
++function isWS(t)    { return t && (t.type === "ws" || t.type === "comment") }
++function isIdent(t) { return t && t.type === "ident" }
++function upper(t)   { return (t && t.value || "").toUpperCase() }
++
++function skipWs(tokens, i) {
++  while (i < tokens.length && isWS(tokens[i])) i++
++  return i
++}
++
++function skipParenGroup(tokens, i) {
++  if (tokens[i]?.type !== "punct" || tokens[i]?.value !== "(") return i
++  let depth = 1
++  i++
++  while (i < tokens.length && depth > 0) {
++    if (tokens[i].type === "punct") {
++      if (tokens[i].value === "(") depth++
++      else if (tokens[i].value === ")") depth--
++    }
++    i++
++  }
++  return i
++}
++
++export function buildAliasMap(sql) {
++  const tokens = tokenize(sql)
++  const map = {}
++
++  function register(alias, obj) {
++    if (!alias) return
++    const key = alias.toLowerCase()
++    if (!(key in map)) map[key] = obj
++  }
++
++  // WITH ... AS ( ... ) [, cte2 AS ( ... )]
++  for (let i = 0; i < tokens.length; i++) {
++    if (!isIdent(tokens[i]) || upper(tokens[i]) !== "WITH") continue
++    let j = skipWs(tokens, i + 1)
++    while (j < tokens.length) {
++      if (!isIdent(tokens[j])) break
++      const cteName = tokens[j].value
++      let k = skipWs(tokens, j + 1)
++      if (tokens[k]?.type === "punct" && tokens[k]?.value === "(") {
++        k = skipParenGroup(tokens, k)
++        k = skipWs(tokens, k)
++      }
++      if (!isIdent(tokens[k]) || upper(tokens[k]) !== "AS") break
++      k = skipWs(tokens, k + 1)
++      if (tokens[k]?.type !== "punct" || tokens[k]?.value !== "(") break
++      k = skipParenGroup(tokens, k)
++      register(cteName, cteName)
++      k = skipWs(tokens, k)
++      if (tokens[k]?.type === "punct" && tokens[k]?.value === ",") {
++        j = skipWs(tokens, k + 1)
++        continue
++      }
++      break
++    }
++  }
++
++  // FROM / JOIN <table> [AS] <alias>
++  for (let i = 0; i < tokens.length; i++) {
++    if (!isIdent(tokens[i])) continue
++    const kw = upper(tokens[i])
++    if (kw !== "FROM" && kw !== "JOIN") continue
++
++    let j = skipWs(tokens, i + 1)
++    if (j >= tokens.length) continue
++
++    if (tokens[j].type === "punct" && tokens[j].value === "(") {
++      j = skipParenGroup(tokens, j)
++      j = skipWs(tokens, j)
++      if (isIdent(tokens[j]) && upper(tokens[j]) === "AS") {
++        j = skipWs(tokens, j + 1)
++      }
++      if (isIdent(tokens[j]) && !STOP_AFTER_TABLE.has(upper(tokens[j]))) {
++        register(tokens[j].value, "(subquery)")
++      }
++      continue
++    }
++
++    if (!isIdent(tokens[j])) continue
++    let objName = tokens[j].value
++    if (tokens[j + 1]?.type === "punct" && tokens[j + 1]?.value === "." && isIdent(tokens[j + 2])) {
++      objName = tokens[j + 2].value
++      j += 2
++    }
++
++    register(objName, objName)
++
++    let k = skipWs(tokens, j + 1)
++    if (isIdent(tokens[k]) && upper(tokens[k]) === "AS") {
++      k = skipWs(tokens, k + 1)
++    }
++    if (isIdent(tokens[k])) {
++      const aliasUp = upper(tokens[k])
++      if (!STOP_AFTER_TABLE.has(aliasUp)) {
++        register(tokens[k].value, objName)
++      }
++    }
++  }
++
++  return map
++}
++
++export function resolveTerm(term, aliasMap) {
++  if (!term) return null
++  const base = term.split(".")[0].trim().toLowerCase()
++  if (!base) return null
++  return aliasMap[base] || null
++}
+diff --git a/src/lib/object-info/index.d.ts b/src/lib/object-info/index.d.ts
+new file mode 100644
+index 0000000..eb3c9d0
+--- /dev/null
++++ b/src/lib/object-info/index.d.ts
+@@ -0,0 +1,46 @@
++export interface TokenMatch { start: number; end: number }
++export interface PredicateRef { clause: string; text: string; start: number; end: number }
++export interface HighlightResult { html: string; areaCount: number; matchCount: number }
++export interface AliasMap { [alias: string]: string }
++
++export interface ColumnMeta {
++  name: string
++  type: string
++  nullable: boolean
++  distinct: number | null
++  nullCount: number | null
++}
++export interface IndexMeta {
++  name: string
++  type: string
++  columns: string[]
++  planUsage?: 'ASIS' | 'TOBE' | 'BOTH'
++  isNew?: boolean
++  rationale?: string
++}
++export interface ObjectMeta {
++  name: string
++  type: string
++  schema: string
++  totalRows: number | null
++  avgRowBytes: number | null
++  lastAnalyzed: string | null
++  note?: string
++  columns: ColumnMeta[]
++  indexes: IndexMeta[]
++}
++
++declare module './sqlHighlight' {
++  export function tokenize(sql: string): any[]
++  export function findMatches(text: string, term: string, opts?: { caseInsensitive?: boolean }): TokenMatch[]
++  export function findPredicatesForObject(sql: string, objectName: string, aliasMap: AliasMap, objectColumns?: string[]): PredicateRef[]
++  export function highlightSqlMulti(text: string, terms: string[], opts?: { caseInsensitive?: boolean; showAreas?: boolean }): HighlightResult
++}
++declare module './aliasResolver' {
++  export function buildAliasMap(sql: string): AliasMap
++  export function resolveTerm(term: string, aliasMap: AliasMap): string | null
++}
++declare module './objectMeta' {
++  export function getObjectMeta(name: string): ObjectMeta | null
++  export const OBJECT_META: Record<string, ObjectMeta>
++}
+diff --git a/src/lib/object-info/objectMeta.d.ts b/src/lib/object-info/objectMeta.d.ts
+new file mode 100644
+index 0000000..1609e32
+--- /dev/null
++++ b/src/lib/object-info/objectMeta.d.ts
+@@ -0,0 +1,3 @@
++import type { ObjectMeta } from './index'
++export const OBJECT_META: Record<string, ObjectMeta>
++export function getObjectMeta(name: string): ObjectMeta | null
+diff --git a/src/lib/object-info/objectMeta.js b/src/lib/object-info/objectMeta.js
+new file mode 100644
+index 0000000..c52d8d7
+--- /dev/null
++++ b/src/lib/object-info/objectMeta.js
+@@ -0,0 +1,443 @@
++// Mock object metadata.
++//
++// Plan-usage markers (per table, at most one of each):
++//   planUsage: "ASIS"  — current execution plan accesses the table via this index
++//   planUsage: "TOBE"  — proposed (post-tuning) plan would use this index
++//   planUsage: "BOTH"  — same index used before and after (no change)
++//   (absent)           — index exists but is not selected by either plan
++//
++// `isNew: true` marks a TO-BE index that does NOT currently exist.
++
++export const OBJECT_META = {
++  orders: {
++    name: "ORDERS", type: "TABLE", schema: "SALES",
++    totalRows: 12483217, avgRowBytes: 168, lastAnalyzed: "2026-04-08 02:14",
++    columns: [
++      { name: "ORDER_ID",     type: "NUMBER(12)",   nullable: false, distinct: 12483217, nullCount: 0 },
++      { name: "ORDER_DATE",   type: "DATE",         nullable: false, distinct:     1095, nullCount: 0 },
++      { name: "CUSTOMER_ID",  type: "NUMBER(10)",   nullable: false, distinct:   847219, nullCount: 0 },
++      { name: "SALES_REP_ID", type: "NUMBER(10)",   nullable: true,  distinct:      482, nullCount: 312004 },
++      { name: "STATUS",       type: "VARCHAR2(20)", nullable: false, distinct:        6, nullCount: 0 },
++      { name: "PRIORITY",     type: "CHAR(1)",      nullable: false, distinct:        4, nullCount: 0 },
++      { name: "TOTAL",        type: "NUMBER(14,2)", nullable: true,  distinct:  3912004, nullCount: 1204 },
++      { name: "DISCOUNT_PCT", type: "NUMBER(5,2)",  nullable: true,  distinct:       41, nullCount: 8840021 },
++      { name: "SHIPPED_AT",   type: "TIMESTAMP",    nullable: true,  distinct:  9104332, nullCount: 218442 },
++      { name: "CREATED_AT",   type: "TIMESTAMP",    nullable: false, distinct: 12481044, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_ORDERS",              type: "UNIQUE", columns: ["ORDER_ID"] },
++      { name: "IDX_ORDERS_CUST_DATE",   type: "NORMAL", columns: ["CUSTOMER_ID", "ORDER_DATE"] },
++      { name: "IDX_ORDERS_DATE_STATUS", type: "NORMAL", columns: ["ORDER_DATE", "STATUS"], planUsage: "ASIS",
++        rationale: "현재 플랜: order_date BETWEEN + status 필터로 range scan" },
++      { name: "IDX_ORDERS_STATUS",      type: "BITMAP", columns: ["STATUS"] },
++      { name: "IDX_ORDERS_PRIORITY",    type: "BITMAP", columns: ["PRIORITY"] },
++      { name: "IDX_ORDERS_REP",         type: "NORMAL", columns: ["SALES_REP_ID", "ORDER_DATE"] },
++      { name: "IDX_ORDERS_SHIPPED",     type: "NORMAL", columns: ["SHIPPED_AT"] },
++      { name: "IDX_ORDERS_CREATED",     type: "NORMAL", columns: ["CREATED_AT"] },
++      { name: "IDX_ORDERS_DATE_STAT_CUST", type: "NORMAL", columns: ["ORDER_DATE", "STATUS", "CUSTOMER_ID"],
++        planUsage: "TOBE", isNew: true,
++        rationale: "제안 플랜: date/status 필터 + customer join 키를 커버링" },
++    ],
++  },
++
++  order_items: {
++    name: "ORDER_ITEMS", type: "TABLE", schema: "SALES",
++    totalRows: 48921004, avgRowBytes: 94, lastAnalyzed: "2026-04-08 02:14",
++    columns: [
++      { name: "ORDER_ITEM_ID", type: "NUMBER(14)",   nullable: false, distinct: 48921004, nullCount: 0 },
++      { name: "ORDER_ID",      type: "NUMBER(12)",   nullable: false, distinct: 12483217, nullCount: 0 },
++      { name: "PRODUCT_ID",    type: "NUMBER(10)",   nullable: false, distinct:    82417, nullCount: 0 },
++      { name: "WAREHOUSE_ID",  type: "NUMBER(6)",    nullable: false, distinct:      142, nullCount: 0 },
++      { name: "QUANTITY",      type: "NUMBER(8)",    nullable: false, distinct:      512, nullCount: 0 },
++      { name: "UNIT_PRICE",    type: "NUMBER(12,2)", nullable: false, distinct:   312049, nullCount: 0 },
++      { name: "LINE_STATUS",   type: "VARCHAR2(20)", nullable: false, distinct:        5, nullCount: 0 },
++      { name: "CREATED_AT",    type: "TIMESTAMP",    nullable: false, distinct: 48910022, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_ORDER_ITEMS",   type: "UNIQUE", columns: ["ORDER_ITEM_ID"] },
++      { name: "UK_OI_ORDER_PROD", type: "UNIQUE", columns: ["ORDER_ID", "PRODUCT_ID"], planUsage: "TOBE",
++        rationale: "제안 플랜: 기존 UK로 order+product 동시 커버" },
++      { name: "IDX_OI_ORDER",     type: "NORMAL", columns: ["ORDER_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: order_id nested-loop lookup" },
++      { name: "IDX_OI_PRODUCT",   type: "NORMAL", columns: ["PRODUCT_ID", "LINE_STATUS"] },
++      { name: "IDX_OI_WAREHOUSE", type: "NORMAL", columns: ["WAREHOUSE_ID", "PRODUCT_ID"] },
++      { name: "IDX_OI_PROD_QTY",  type: "NORMAL", columns: ["PRODUCT_ID", "QUANTITY"] },
++      { name: "IDX_OI_STATUS",    type: "BITMAP", columns: ["LINE_STATUS"] },
++    ],
++  },
++
++  customers: {
++    name: "CUSTOMERS", type: "TABLE", schema: "SALES",
++    totalRows: 847219, avgRowBytes: 248, lastAnalyzed: "2026-04-07 23:51",
++    columns: [
++      { name: "CUSTOMER_ID",   type: "NUMBER(10)",    nullable: false, distinct: 847219, nullCount: 0 },
++      { name: "CUSTOMER_NAME", type: "VARCHAR2(120)", nullable: false, distinct: 842884, nullCount: 0 },
++      { name: "EMAIL",         type: "VARCHAR2(200)", nullable: false, distinct: 847219, nullCount: 0 },
++      { name: "REGION",        type: "VARCHAR2(10)",  nullable: false, distinct:      4, nullCount: 0 },
++      { name: "COUNTRY_CODE",  type: "CHAR(2)",       nullable: false, distinct:    187, nullCount: 0 },
++      { name: "SEGMENT",       type: "VARCHAR2(20)",  nullable: false, distinct:      5, nullCount: 0 },
++      { name: "CREDIT_LIMIT",  type: "NUMBER(12,2)",  nullable: true,  distinct:  12044, nullCount: 88412 },
++      { name: "CREATED_AT",    type: "DATE",          nullable: false, distinct:   2918, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_CUSTOMERS",        type: "UNIQUE", columns: ["CUSTOMER_ID"] },
++      { name: "UK_CUSTOMERS_EMAIL",  type: "UNIQUE", columns: ["EMAIL"] },
++      { name: "IDX_CUST_REGION",     type: "BITMAP", columns: ["REGION"], planUsage: "ASIS",
++        rationale: "현재 플랜: region='APAC' bitmap scan" },
++      { name: "IDX_CUST_SEGMENT",    type: "BITMAP", columns: ["SEGMENT"] },
++      { name: "IDX_CUST_COUNTRY",    type: "NORMAL", columns: ["COUNTRY_CODE"] },
++      { name: "IDX_CUST_REGION_SEG", type: "NORMAL", columns: ["REGION", "SEGMENT", "CREDIT_LIMIT"] },
++      { name: "IDX_CUST_NAME",       type: "NORMAL", columns: ["CUSTOMER_NAME"] },
++      { name: "IDX_CUST_CREATED",    type: "NORMAL", columns: ["CREATED_AT"] },
++      { name: "IDX_CUST_REGION_SEG_ID", type: "NORMAL", columns: ["REGION", "SEGMENT", "CUSTOMER_ID"],
++        planUsage: "TOBE", isNew: true,
++        rationale: "제안 플랜: region+segment+id 커버링" },
++    ],
++  },
++
++  products: {
++    name: "PRODUCTS", type: "TABLE", schema: "CATALOG",
++    totalRows: 82417, avgRowBytes: 342, lastAnalyzed: "2026-04-05 14:02",
++    columns: [
++      { name: "PRODUCT_ID",   type: "NUMBER(10)",    nullable: false, distinct: 82417, nullCount: 0 },
++      { name: "SKU",          type: "VARCHAR2(32)",  nullable: false, distinct: 82417, nullCount: 0 },
++      { name: "PRODUCT_NAME", type: "VARCHAR2(200)", nullable: false, distinct: 81904, nullCount: 0 },
++      { name: "CATEGORY_ID",  type: "NUMBER(6)",     nullable: false, distinct:   142, nullCount: 0 },
++      { name: "SUPPLIER_ID",  type: "NUMBER(8)",     nullable: false, distinct:  1820, nullCount: 0 },
++      { name: "PRICE",        type: "NUMBER(12,2)",  nullable: false, distinct: 11043, nullCount: 0 },
++      { name: "COST",         type: "NUMBER(12,2)",  nullable: true,  distinct:  9844, nullCount: 410 },
++      { name: "IS_ACTIVE",    type: "CHAR(1)",       nullable: false, distinct:     2, nullCount: 0 },
++      { name: "WEIGHT_G",     type: "NUMBER(10,2)",  nullable: true,  distinct:  4102, nullCount: 1804 },
++    ],
++    indexes: [
++      { name: "PK_PRODUCTS",     type: "UNIQUE", columns: ["PRODUCT_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: order_items → products PK 단건 probe" },
++      { name: "UK_PRODUCTS_SKU", type: "UNIQUE", columns: ["SKU"] },
++      { name: "IDX_PROD_CATEGORY", type: "NORMAL", columns: ["CATEGORY_ID"] },
++      { name: "IDX_PROD_SUPPLIER", type: "NORMAL", columns: ["SUPPLIER_ID"] },
++      { name: "IDX_PROD_ACTIVE",   type: "BITMAP", columns: ["IS_ACTIVE"] },
++      { name: "IDX_PROD_CAT_ACT",  type: "NORMAL", columns: ["CATEGORY_ID", "IS_ACTIVE", "PRICE"], planUsage: "TOBE",
++        rationale: "제안 플랜: category+active 필터 push-down" },
++      { name: "IDX_PROD_SUP_CAT",  type: "NORMAL", columns: ["SUPPLIER_ID", "CATEGORY_ID"] },
++      { name: "IDX_PROD_PRICE",    type: "NORMAL", columns: ["PRICE"] },
++      { name: "IDX_PROD_NAME",     type: "NORMAL", columns: ["PRODUCT_NAME"] },
++    ],
++  },
++
++  categories: {
++    name: "CATEGORIES", type: "TABLE", schema: "CATALOG",
++    totalRows: 142, avgRowBytes: 116, lastAnalyzed: "2026-03-22 09:12",
++    columns: [
++      { name: "CATEGORY_ID",    type: "NUMBER(6)",    nullable: false, distinct: 142, nullCount: 0 },
++      { name: "CATEGORY_CODE",  type: "VARCHAR2(20)", nullable: false, distinct: 142, nullCount: 0 },
++      { name: "CATEGORY_NAME",  type: "VARCHAR2(80)", nullable: false, distinct: 142, nullCount: 0 },
++      { name: "PARENT_ID",      type: "NUMBER(6)",    nullable: true,  distinct:  18, nullCount:  18 },
++      { name: "CATEGORY_LEVEL", type: "NUMBER(2)",    nullable: false, distinct:   4, nullCount:   0 },
++      { name: "DISPLAY_ORDER",  type: "NUMBER(4)",    nullable: false, distinct: 142, nullCount:   0 },
++    ],
++    indexes: [
++      { name: "PK_CATEGORIES",     type: "UNIQUE", columns: ["CATEGORY_ID"], planUsage: "BOTH",
++        rationale: "단건 조인 probe — 플랜 변경 없음" },
++      { name: "UK_CAT_CODE",       type: "UNIQUE", columns: ["CATEGORY_CODE"] },
++      { name: "IDX_CAT_PARENT",    type: "NORMAL", columns: ["PARENT_ID"] },
++      { name: "IDX_CAT_LEVEL",     type: "BITMAP", columns: ["CATEGORY_LEVEL"] },
++      { name: "IDX_CAT_PARENT_LV", type: "NORMAL", columns: ["PARENT_ID", "CATEGORY_LEVEL"] },
++      { name: "IDX_CAT_NAME",      type: "NORMAL", columns: ["CATEGORY_NAME"] },
++    ],
++  },
++
++  suppliers: {
++    name: "SUPPLIERS", type: "TABLE", schema: "CATALOG",
++    totalRows: 1820, avgRowBytes: 284, lastAnalyzed: "2026-04-01 18:30",
++    columns: [
++      { name: "SUPPLIER_ID",   type: "NUMBER(8)",     nullable: false, distinct: 1820, nullCount: 0 },
++      { name: "SUPPLIER_CODE", type: "VARCHAR2(20)",  nullable: false, distinct: 1820, nullCount: 0 },
++      { name: "SUPPLIER_NAME", type: "VARCHAR2(120)", nullable: false, distinct: 1804, nullCount: 0 },
++      { name: "COUNTRY_CODE",  type: "CHAR(2)",       nullable: false, distinct:   64, nullCount: 0 },
++      { name: "RATING",        type: "NUMBER(2,1)",   nullable: true,  distinct:   41, nullCount: 88 },
++      { name: "STATUS",        type: "VARCHAR2(20)",  nullable: false, distinct:    3, nullCount: 0 },
++      { name: "CONTRACT_FROM", type: "DATE",          nullable: false, distinct: 1204, nullCount: 0 },
++      { name: "CONTRACT_TO",   type: "DATE",          nullable: true,  distinct:  982, nullCount: 204 },
++    ],
++    indexes: [
++      { name: "PK_SUPPLIERS",           type: "UNIQUE", columns: ["SUPPLIER_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: supplier_id 단건 probe" },
++      { name: "UK_SUPP_CODE",           type: "UNIQUE", columns: ["SUPPLIER_CODE"] },
++      { name: "IDX_SUPP_COUNTRY",       type: "NORMAL", columns: ["COUNTRY_CODE"] },
++      { name: "IDX_SUPP_STATUS",        type: "BITMAP", columns: ["STATUS"] },
++      { name: "IDX_SUPP_STATUS_RATING", type: "NORMAL", columns: ["STATUS", "RATING"], planUsage: "TOBE",
++        rationale: "제안 플랜: status+rating 필터 push-down" },
++      { name: "IDX_SUPP_RATING",        type: "NORMAL", columns: ["RATING"] },
++      { name: "IDX_SUPP_NAME",          type: "NORMAL", columns: ["SUPPLIER_NAME"] },
++      { name: "IDX_SUPP_CONTRACT",      type: "NORMAL", columns: ["CONTRACT_FROM", "CONTRACT_TO"] },
++    ],
++  },
++
++  warehouses: {
++    name: "WAREHOUSES", type: "TABLE", schema: "LOGISTICS",
++    totalRows: 142, avgRowBytes: 196, lastAnalyzed: "2026-03-30 11:04",
++    columns: [
++      { name: "WAREHOUSE_ID",   type: "NUMBER(6)",    nullable: false, distinct: 142, nullCount: 0 },
++      { name: "WAREHOUSE_CODE", type: "VARCHAR2(20)", nullable: false, distinct: 142, nullCount: 0 },
++      { name: "WAREHOUSE_NAME", type: "VARCHAR2(80)", nullable: false, distinct: 142, nullCount: 0 },
++      { name: "REGION",         type: "VARCHAR2(10)", nullable: false, distinct:   4, nullCount: 0 },
++      { name: "COUNTRY_CODE",   type: "CHAR(2)",      nullable: false, distinct:  42, nullCount: 0 },
++      { name: "CAPACITY_M3",    type: "NUMBER(10)",   nullable: true,  distinct: 108, nullCount: 4 },
++      { name: "STATUS",         type: "VARCHAR2(20)", nullable: false, distinct:   3, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_WAREHOUSES",         type: "UNIQUE", columns: ["WAREHOUSE_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: warehouse_id 단건 probe" },
++      { name: "UK_WH_CODE",            type: "UNIQUE", columns: ["WAREHOUSE_CODE"] },
++      { name: "IDX_WH_COUNTRY",        type: "NORMAL", columns: ["COUNTRY_CODE"], planUsage: "TOBE",
++        rationale: "제안 플랜: country_code IN 필터 push-down" },
++      { name: "IDX_WH_REGION",         type: "BITMAP", columns: ["REGION"] },
++      { name: "IDX_WH_STATUS",         type: "BITMAP", columns: ["STATUS"] },
++      { name: "IDX_WH_REGION_COUNTRY", type: "NORMAL", columns: ["REGION", "COUNTRY_CODE"] },
++    ],
++  },
++
++  shipments: {
++    name: "SHIPMENTS", type: "TABLE", schema: "LOGISTICS",
++    totalRows: 11842004, avgRowBytes: 124, lastAnalyzed: "2026-04-08 03:02",
++    columns: [
++      { name: "SHIPMENT_ID",    type: "NUMBER(14)",   nullable: false, distinct: 11842004, nullCount: 0 },
++      { name: "ORDER_ID",       type: "NUMBER(12)",   nullable: false, distinct: 11842004, nullCount: 0 },
++      { name: "TRACKING_NUMBER",type: "VARCHAR2(40)", nullable: true,  distinct: 11720882, nullCount: 121122 },
++      { name: "CARRIER",        type: "VARCHAR2(30)", nullable: true,  distinct:       12, nullCount: 408102 },
++      { name: "SHIPPED_AT",     type: "TIMESTAMP",    nullable: true,  distinct:  9420388, nullCount: 408102 },
++      { name: "DELIVERED_AT",   type: "TIMESTAMP",    nullable: true,  distinct:  9101844, nullCount: 2912004 },
++      { name: "STATUS",         type: "VARCHAR2(20)", nullable: false, distinct:        6, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_SHIPMENTS",          type: "UNIQUE", columns: ["SHIPMENT_ID"] },
++      { name: "UK_SHIP_TRACKING",      type: "UNIQUE", columns: ["TRACKING_NUMBER"] },
++      { name: "IDX_SHIP_ORDER",        type: "NORMAL", columns: ["ORDER_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: order_id LEFT JOIN lookup" },
++      { name: "IDX_SHIP_STATUS",       type: "BITMAP", columns: ["STATUS"] },
++      { name: "IDX_SHIP_CARRIER_DATE", type: "NORMAL", columns: ["CARRIER", "SHIPPED_AT"] },
++      { name: "IDX_SHIP_SHIPPED",      type: "NORMAL", columns: ["SHIPPED_AT"] },
++      { name: "IDX_SHIP_DELIVERED",    type: "NORMAL", columns: ["DELIVERED_AT"] },
++      { name: "IDX_SHIP_ORDER_CARRIER",type: "NORMAL", columns: ["ORDER_ID", "CARRIER"],
++        planUsage: "TOBE", isNew: true,
++        rationale: "제안 플랜: order + carrier 필터 커버링" },
++    ],
++  },
++
++  employees: {
++    name: "EMPLOYEES", type: "TABLE", schema: "HR",
++    totalRows: 12041, avgRowBytes: 312, lastAnalyzed: "2026-04-01 22:10",
++    columns: [
++      { name: "EMPLOYEE_ID",   type: "NUMBER(10)",    nullable: false, distinct: 12041, nullCount: 0 },
++      { name: "FIRST_NAME",    type: "VARCHAR2(40)",  nullable: false, distinct:  3840, nullCount: 0 },
++      { name: "LAST_NAME",     type: "VARCHAR2(40)",  nullable: false, distinct:  6102, nullCount: 0 },
++      { name: "EMAIL",         type: "VARCHAR2(200)", nullable: false, distinct: 12041, nullCount: 0 },
++      { name: "DEPARTMENT_ID", type: "NUMBER(6)",     nullable: false, distinct:    64, nullCount: 0 },
++      { name: "MANAGER_ID",    type: "NUMBER(10)",    nullable: true,  distinct:  1204, nullCount: 84 },
++      { name: "HIRE_DATE",     type: "DATE",          nullable: false, distinct:  4018, nullCount: 0 },
++      { name: "STATUS",        type: "VARCHAR2(20)",  nullable: false, distinct:     4, nullCount: 0 },
++      { name: "SALARY",        type: "NUMBER(12,2)",  nullable: true,  distinct:  6044, nullCount: 220 },
++    ],
++    indexes: [
++      { name: "PK_EMPLOYEES",        type: "UNIQUE", columns: ["EMPLOYEE_ID"], planUsage: "BOTH",
++        rationale: "LEFT JOIN 단건 probe — 플랜 변경 없음" },
++      { name: "UK_EMP_EMAIL",        type: "UNIQUE", columns: ["EMAIL"] },
++      { name: "IDX_EMP_DEPT",        type: "NORMAL", columns: ["DEPARTMENT_ID"] },
++      { name: "IDX_EMP_MGR",         type: "NORMAL", columns: ["MANAGER_ID"] },
++      { name: "IDX_EMP_HIRE",        type: "NORMAL", columns: ["HIRE_DATE"] },
++      { name: "IDX_EMP_STATUS",      type: "BITMAP", columns: ["STATUS"] },
++      { name: "IDX_EMP_NAME",        type: "NORMAL", columns: ["LAST_NAME", "FIRST_NAME"] },
++      { name: "IDX_EMP_DEPT_STATUS", type: "NORMAL", columns: ["DEPARTMENT_ID", "STATUS"] },
++    ],
++  },
++
++  users: {
++    name: "USERS", type: "TABLE", schema: "APP",
++    totalRows: 2104887, avgRowBytes: 198, lastAnalyzed: "2026-04-09 01:30",
++    columns: [
++      { name: "USER_ID",    type: "NUMBER(12)",    nullable: false, distinct: 2104887, nullCount: 0 },
++      { name: "EMAIL",      type: "VARCHAR2(200)", nullable: false, distinct: 2104887, nullCount: 0 },
++      { name: "STATUS",     type: "VARCHAR2(20)",  nullable: false, distinct:       4, nullCount: 0 },
++      { name: "CREATED_AT", type: "DATE",          nullable: false, distinct:    3204, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_USERS",               type: "UNIQUE", columns: ["USER_ID"] },
++      { name: "UK_USERS_EMAIL",         type: "UNIQUE", columns: ["EMAIL"] },
++      { name: "IDX_USERS_STAT",         type: "BITMAP", columns: ["STATUS"], planUsage: "ASIS",
++        rationale: "현재 플랜: status='ACTIVE' bitmap scan" },
++      { name: "IDX_USERS_STAT_CREATED", type: "NORMAL", columns: ["STATUS", "CREATED_AT"], planUsage: "TOBE",
++        rationale: "제안 플랜: status + created_at 동시 필터" },
++    ],
++  },
++
++  sessions: {
++    name: "SESSIONS", type: "TABLE", schema: "APP",
++    totalRows: 18442993, avgRowBytes: 64, lastAnalyzed: "2026-04-09 01:30",
++    columns: [
++      { name: "SESSION_ID",    type: "NUMBER(14)", nullable: false, distinct: 18442993, nullCount: 0 },
++      { name: "USER_ID",       type: "NUMBER(12)", nullable: false, distinct:  2098441, nullCount: 0 },
++      { name: "LAST_LOGIN",    type: "TIMESTAMP",  nullable: true,  distinct: 15094108, nullCount: 408882 },
++      { name: "SESSION_COUNT", type: "NUMBER(8)",  nullable: false, distinct:     1204, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_SESSIONS",        type: "UNIQUE", columns: ["SESSION_ID"] },
++      { name: "IDX_SESSIONS_USR",   type: "NORMAL", columns: ["USER_ID", "LAST_LOGIN"], planUsage: "BOTH",
++        rationale: "user_id+last_login 커버링 — 플랜 변경 없음" },
++      { name: "IDX_SESSIONS_LOGIN", type: "NORMAL", columns: ["LAST_LOGIN"] },
++    ],
++  },
++
++  monthly_sales: {
++    name: "MONTHLY_SALES", type: "CTE", schema: "(inline)",
++    totalRows: null, avgRowBytes: null, lastAnalyzed: null,
++    note: "Common Table Expression — 런타임에 생성. 통계 없음.",
++    columns: [
++      { name: "MONTH",  type: "DATE",         nullable: false, distinct: null, nullCount: null },
++      { name: "REGION", type: "VARCHAR2(10)", nullable: false, distinct: null, nullCount: null },
++      { name: "AMOUNT", type: "NUMBER",       nullable: true,  distinct: null, nullCount: null },
++    ],
++    indexes: [],
++  },
++  ranked: {
++    name: "RANKED", type: "CTE", schema: "(inline)",
++    totalRows: null, avgRowBytes: null, lastAnalyzed: null,
++    note: "Common Table Expression — 런타임에 생성. 통계 없음.",
++    columns: [
++      { name: "MONTH",  type: "DATE",         nullable: false, distinct: null, nullCount: null },
++      { name: "REGION", type: "VARCHAR2(10)", nullable: false, distinct: null, nullCount: null },
++      { name: "AMOUNT", type: "NUMBER",       nullable: true,  distinct: null, nullCount: null },
++      { name: "RNK",    type: "NUMBER",       nullable: false, distinct: null, nullCount: null },
++    ],
++    indexes: [],
++  },
++
++  departments: {
++    name: "DEPARTMENTS", type: "TABLE", schema: "HR",
++    totalRows: 64, avgRowBytes: 124, lastAnalyzed: "2026-04-05 08:14",
++    columns: [
++      { name: "DEPARTMENT_ID",   type: "NUMBER(6)",    nullable: false, distinct: 64, nullCount: 0 },
++      { name: "DEPARTMENT_NAME", type: "VARCHAR2(80)", nullable: false, distinct: 64, nullCount: 0 },
++      { name: "MANAGER_ID",      type: "NUMBER(10)",   nullable: true,  distinct: 58, nullCount: 2 },
++      { name: "LOCATION_ID",     type: "NUMBER(6)",    nullable: false, distinct: 12, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_DEPARTMENTS",   type: "UNIQUE", columns: ["DEPARTMENT_ID"], planUsage: "BOTH",
++        rationale: "단건 probe — 플랜 변경 없음" },
++      { name: "UK_DEPT_NAME",     type: "UNIQUE", columns: ["DEPARTMENT_NAME"] },
++      { name: "IDX_DEPT_LOC",     type: "NORMAL", columns: ["LOCATION_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: location_id = :loc_id 단일 컬럼 range scan" },
++      { name: "IDX_DEPT_LOC_MGR", type: "NORMAL", columns: ["LOCATION_ID", "MANAGER_ID"], planUsage: "TOBE", isNew: true,
++        rationale: "제안 플랜: location + manager 커버링으로 self-join 해소" },
++    ],
++  },
++
++  emp: {
++    name: "EMP", type: "TABLE", schema: "HR",
++    totalRows: 14204, avgRowBytes: 186, lastAnalyzed: "2026-04-06 23:40",
++    columns: [
++      { name: "EMP_ID",    type: "NUMBER(10)",   nullable: false, distinct: 14204, nullCount: 0 },
++      { name: "DEPT_ID",   type: "NUMBER(6)",    nullable: false, distinct:   120, nullCount: 0 },
++      { name: "HIRE_DATE", type: "DATE",         nullable: false, distinct:  4218, nullCount: 0 },
++      { name: "SALARY",    type: "NUMBER(12,2)", nullable: true,  distinct:  6102, nullCount: 212 },
++      { name: "GRADE",     type: "VARCHAR2(10)", nullable: false, distinct:     7, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_EMP",            type: "UNIQUE", columns: ["EMP_ID"] },
++      { name: "IDX_EMP_DEPT",      type: "NORMAL", columns: ["DEPT_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: HASH JOIN 후 EMP FULL SCAN → ORDER BY" },
++      { name: "IDX_EMP_HIRE_DATE", type: "NORMAL", columns: ["HIRE_DATE", "SALARY"], planUsage: "TOBE", isNew: true,
++        rationale: "제안 플랜: hire_date 필터 push-down + salary 커버링으로 SORT 제거" },
++      { name: "IDX_EMP_GRADE",     type: "BITMAP", columns: ["GRADE"] },
++    ],
++  },
++
++  dept: {
++    name: "DEPT", type: "TABLE", schema: "HR",
++    totalRows: 120, avgRowBytes: 102, lastAnalyzed: "2026-04-06 23:40",
++    columns: [
++      { name: "DEPT_ID",   type: "NUMBER(6)",    nullable: false, distinct: 120, nullCount: 0 },
++      { name: "DEPT_NAME", type: "VARCHAR2(80)", nullable: false, distinct: 120, nullCount: 0 },
++      { name: "REGION",    type: "VARCHAR2(10)", nullable: false, distinct:   4, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_DEPT",     type: "UNIQUE", columns: ["DEPT_ID"], planUsage: "BOTH",
++        rationale: "단건 조인 probe — 플랜 변경 없음" },
++      { name: "UK_DEPT_NM",  type: "UNIQUE", columns: ["DEPT_NAME"] },
++      { name: "IDX_DEPT_RG", type: "BITMAP", columns: ["REGION"] },
++    ],
++  },
++
++  accounts: {
++    name: "ACCOUNTS", type: "TABLE", schema: "FIN",
++    totalRows: 2048112, avgRowBytes: 196, lastAnalyzed: "2026-04-08 04:18",
++    columns: [
++      { name: "ACCOUNT_ID", type: "NUMBER(12)",   nullable: false, distinct: 2048112, nullCount: 0 },
++      { name: "ACCOUNT_NO", type: "VARCHAR2(24)", nullable: false, distinct: 2048112, nullCount: 0 },
++      { name: "BALANCE",    type: "NUMBER(16,2)", nullable: false, distinct:  984203, nullCount: 0 },
++      { name: "STATUS",     type: "VARCHAR2(20)", nullable: false, distinct:       5, nullCount: 0 },
++      { name: "OPENED_AT",  type: "DATE",         nullable: false, distinct:    3842, nullCount: 0 },
++      { name: "CURRENCY",   type: "CHAR(3)",      nullable: false, distinct:      18, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_ACCOUNTS",          type: "UNIQUE", columns: ["ACCOUNT_ID"] },
++      { name: "UK_ACCOUNTS_NO",       type: "UNIQUE", columns: ["ACCOUNT_NO"] },
++      { name: "IDX_ACC_STATUS",       type: "BITMAP", columns: ["STATUS"], planUsage: "ASIS",
++        rationale: "현재 플랜: status='ACTIVE' bitmap access 후 HASH JOIN TRANSACTIONS" },
++      { name: "IDX_ACC_STATUS_BAL",   type: "NORMAL", columns: ["STATUS", "BALANCE", "ACCOUNT_ID"], planUsage: "TOBE", isNew: true,
++        rationale: "제안 플랜: status+balance+id 커버링으로 GROUP BY 전에 조인키 확보" },
++      { name: "IDX_ACC_OPENED",       type: "NORMAL", columns: ["OPENED_AT"] },
++      { name: "IDX_ACC_CURRENCY",     type: "BITMAP", columns: ["CURRENCY"] },
++    ],
++  },
++
++  transactions: {
++    name: "TRANSACTIONS", type: "TABLE", schema: "FIN",
++    totalRows: 89410244, avgRowBytes: 108, lastAnalyzed: "2026-04-09 02:00",
++    columns: [
++      { name: "TXN_ID",       type: "NUMBER(14)",   nullable: false, distinct: 89410244, nullCount: 0 },
++      { name: "ACCOUNT_ID",   type: "NUMBER(12)",   nullable: false, distinct:  2040882, nullCount: 0 },
++      { name: "STORE_ID",     type: "NUMBER(8)",    nullable: true,  distinct:    12044, nullCount: 412003 },
++      { name: "AMOUNT",       type: "NUMBER(14,2)", nullable: false, distinct:  8210334, nullCount: 0 },
++      { name: "SALE_AMOUNT",  type: "NUMBER(14,2)", nullable: true,  distinct:  7018221, nullCount: 108442 },
++      { name: "TXN_DATE",     type: "DATE",         nullable: false, distinct:     3650, nullCount: 0 },
++      { name: "TXN_TYPE",     type: "VARCHAR2(20)", nullable: false, distinct:        8, nullCount: 0 },
++      { name: "CURRENCY",     type: "CHAR(3)",      nullable: false, distinct:       18, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_TRANSACTIONS",         type: "UNIQUE", columns: ["TXN_ID"] },
++      { name: "IDX_TXN_ACCOUNT",         type: "NORMAL", columns: ["ACCOUNT_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: account_id NL lookup — 파티션 프루닝 없음" },
++      { name: "IDX_TXN_DATE_ACC",        type: "NORMAL", columns: ["TXN_DATE", "ACCOUNT_ID", "AMOUNT"], planUsage: "TOBE", isNew: true,
++        rationale: "제안 플랜: 일자 파티션 키 + 금액 커버링" },
++      { name: "IDX_TXN_STORE_DATE",      type: "NORMAL", columns: ["STORE_ID", "TXN_DATE"] },
++      { name: "IDX_TXN_TYPE",            type: "BITMAP", columns: ["TXN_TYPE"] },
++    ],
++  },
++
++  stores: {
++    name: "STORES", type: "TABLE", schema: "RETAIL",
++    totalRows: 12044, avgRowBytes: 204, lastAnalyzed: "2026-04-02 15:22",
++    columns: [
++      { name: "STORE_ID",    type: "NUMBER(8)",     nullable: false, distinct: 12044, nullCount: 0 },
++      { name: "STORE_CODE",  type: "VARCHAR2(20)",  nullable: false, distinct: 12044, nullCount: 0 },
++      { name: "STORE_NAME",  type: "VARCHAR2(120)", nullable: false, distinct: 11984, nullCount: 0 },
++      { name: "REGION",      type: "VARCHAR2(10)",  nullable: false, distinct:     4, nullCount: 0 },
++      { name: "COUNTRY",     type: "CHAR(2)",       nullable: false, distinct:    42, nullCount: 0 },
++      { name: "STATUS",      type: "VARCHAR2(20)",  nullable: false, distinct:     3, nullCount: 0 },
++    ],
++    indexes: [
++      { name: "PK_STORES",       type: "UNIQUE", columns: ["STORE_ID"], planUsage: "ASIS",
++        rationale: "현재 플랜: store_id 단건 probe" },
++      { name: "UK_STORES_CODE",  type: "UNIQUE", columns: ["STORE_CODE"] },
++      { name: "IDX_STORES_RG",   type: "BITMAP", columns: ["REGION"] },
++      { name: "IDX_STORES_STAT", type: "BITMAP", columns: ["STATUS"], planUsage: "TOBE",
++        rationale: "제안 플랜: status='OPEN' bitmap 필터로 joined row 축소" },
++      { name: "IDX_STORES_NM",   type: "NORMAL", columns: ["STORE_NAME"] },
++    ],
++  },
++}
++
++export function getObjectMeta(name) {
++  if (!name) return null
++  return OBJECT_META[name.toLowerCase()] || null
++}
+diff --git a/src/lib/object-info/sqlHighlight.d.ts b/src/lib/object-info/sqlHighlight.d.ts
+new file mode 100644
+index 0000000..c8a81e5
+--- /dev/null
++++ b/src/lib/object-info/sqlHighlight.d.ts
+@@ -0,0 +1,5 @@
++import type { TokenMatch, PredicateRef, HighlightResult, AliasMap } from './index'
++export function tokenize(sql: string): Array<{ type: string; start: number; end: number; value?: string }>
++export function findMatches(text: string, term: string, opts?: { caseInsensitive?: boolean }): TokenMatch[]
++export function findPredicatesForObject(sql: string, objectName: string, aliasMap: AliasMap, objectColumns?: string[]): PredicateRef[]
++export function highlightSqlMulti(text: string, terms: string[], opts?: { caseInsensitive?: boolean; showAreas?: boolean }): HighlightResult
+diff --git a/src/lib/object-info/sqlHighlight.js b/src/lib/object-info/sqlHighlight.js
+new file mode 100644
+index 0000000..a31c93a
+--- /dev/null
++++ b/src/lib/object-info/sqlHighlight.js
+@@ -0,0 +1,341 @@
++// SQL highlight utilities (v6 = v5 + findMatchesMulti / highlightSqlMulti).
++
++const CLAUSE_START = new Set(["WHERE", "ON", "HAVING"])
++const CONTINUATION = new Set(["AND", "OR"])
++const CLAUSE_END = new Set([
++  "GROUP", "ORDER", "LIMIT", "FETCH", "OFFSET",
++  "UNION", "INTERSECT", "EXCEPT", "MINUS",
++  "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL",
++  "FROM", "WHERE", "HAVING", "SELECT", "WITH", "RETURNING",
++])
++
++export function tokenize(sql) {
++  const tokens = []
++  const n = sql.length
++  let i = 0
++  while (i < n) {
++    const c = sql[i]
++    if (c === " " || c === "\t" || c === "\n" || c === "\r") {
++      let j = i + 1
++      while (j < n && /\s/.test(sql[j])) j++
++      tokens.push({ type: "ws", start: i, end: j })
++      i = j; continue
++    }
++    if (c === "-" && sql[i + 1] === "-") {
++      let j = i + 2
++      while (j < n && sql[j] !== "\n") j++
++      tokens.push({ type: "comment", start: i, end: j })
++      i = j; continue
++    }
++    if (c === "/" && sql[i + 1] === "*") {
++      let j = i + 2
++      while (j < n - 1 && !(sql[j] === "*" && sql[j + 1] === "/")) j++
++      j = Math.min(n, j + 2)
++      tokens.push({ type: "comment", start: i, end: j })
++      i = j; continue
++    }
++    if (c === "'") {
++      let j = i + 1
++      while (j < n) {
++        if (sql[j] === "'") {
++          if (sql[j + 1] === "'") { j += 2; continue }
++          j++; break
++        }
++        j++
++      }
++      tokens.push({ type: "string", start: i, end: j })
++      i = j; continue
++    }
++    if (c === '"') {
++      let j = i + 1
++      while (j < n && sql[j] !== '"') j++
++      j = Math.min(n, j + 1)
++      tokens.push({ type: "ident", start: i, end: j, value: sql.slice(i, j) })
++      i = j; continue
++    }
++    if (/[A-Za-z_]/.test(c)) {
++      let j = i + 1
++      while (j < n && /[A-Za-z0-9_$#]/.test(sql[j])) j++
++      tokens.push({ type: "ident", start: i, end: j, value: sql.slice(i, j) })
++      i = j; continue
++    }
++    if (/[0-9]/.test(c)) {
++      let j = i + 1
++      while (j < n && /[0-9.]/.test(sql[j])) j++
++      tokens.push({ type: "number", start: i, end: j })
++      i = j; continue
++    }
++    tokens.push({ type: "punct", start: i, end: i + 1, value: c })
++    i++
++  }
++  return tokens
++}
++
++export function findPredicateUnits(tokens) {
++  const units = []
++  const stack = []
++  let depth = 0
++  const topScope = () => stack[stack.length - 1]
++  const inScopeNow = () => stack.length > 0 && depth === topScope().scopeDepth
++  function closeUnit(endPos) {
++    const top = topScope()
++    if (!top) return
++    if (top.unitStart != null && endPos > top.unitStart) {
++      units.push({ start: top.unitStart, end: endPos, clause: top.clause })
++    }
++    top.unitStart = null
++  }
++  function firstSigFrom(i) {
++    let j = i
++    while (j < tokens.length && (tokens[j].type === "ws" || tokens[j].type === "comment")) j++
++    return j
++  }
++  for (let i = 0; i < tokens.length; i++) {
++    const t = tokens[i]
++    if (t.type === "ws" || t.type === "comment") continue
++    if (t.type === "punct") {
++      if (t.value === "(") { depth++ }
++      else if (t.value === ")") {
++        depth--
++        while (stack.length > 0 && topScope().scopeDepth > depth) {
++          closeUnit(t.start); stack.pop()
++        }
++      } else if (t.value === ";") {
++        while (stack.length > 0) { closeUnit(t.start); stack.pop() }
++      } else if (t.value === "," && inScopeNow()) {
++        closeUnit(t.start); stack.pop()
++      }
++      continue
++    }
++    if (t.type !== "ident") continue
++    const up = (t.value || "").toUpperCase()
++    if (up === "BETWEEN" && inScopeNow()) {
++      topScope().betweenPending = true
++      continue
++    }
++    if (CLAUSE_START.has(up)) {
++      if (inScopeNow()) closeUnit(t.start)
++      const nextSig = firstSigFrom(i + 1)
++      stack.push({
++        scopeDepth: depth,
++        unitStart: nextSig < tokens.length ? tokens[nextSig].start : t.end,
++        betweenPending: false,
++        clause: up,
++      })
++      continue
++    }
++    if (CONTINUATION.has(up) && inScopeNow()) {
++      if (up === "AND" && topScope().betweenPending) {
++        topScope().betweenPending = false
++        continue
++      }
++      closeUnit(t.start)
++      const nextSig = firstSigFrom(i + 1)
++      topScope().unitStart = nextSig < tokens.length ? tokens[nextSig].start : t.end
++      continue
++    }
++    if (CLAUSE_END.has(up) && inScopeNow()) {
++      closeUnit(t.start); stack.pop()
++      i--
++      continue
++    }
++  }
++  const eof = tokens.length > 0 ? tokens[tokens.length - 1].end : 0
++  while (stack.length > 0) { closeUnit(eof); stack.pop() }
++  return units
++}
++
++export function findMatches(text, term, { caseInsensitive = true } = {}) {
++  if (!term) return []
++  const body = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
++  const flags = caseInsensitive ? "gi" : "g"
++  const re = new RegExp(`(?:^|[^A-Za-z0-9_])(${body})(?=$|[^A-Za-z0-9_])`, flags)
++  const out = []
++  let m
++  while ((m = re.exec(text)) !== null) {
++    const hit = m[1]
++    const hitStart = m.index + (m[0].length - hit.length)
++    out.push({ start: hitStart, end: hitStart + hit.length })
++    if (re.lastIndex === m.index) re.lastIndex++
++  }
++  return out
++}
++
++export function findMatchesMulti(text, terms, opts = {}) {
++  const all = []
++  for (const t of (terms || [])) {
++    if (!t) continue
++    for (const m of findMatches(text, t, opts)) all.push(m)
++  }
++  all.sort((a, b) => (a.start - b.start) || ((b.end - b.start) - (a.end - a.start)))
++  const merged = []
++  let lastEnd = -1
++  for (const m of all) {
++    if (m.start >= lastEnd) {
++      merged.push(m)
++      lastEnd = m.end
++    }
++  }
++  return merged
++}
++
++function escChar(c) {
++  if (c === "&") return "&amp;"
++  if (c === "<") return "&lt;"
++  if (c === ">") return "&gt;"
++  return c
++}
++
++export function buildHighlightedHtml(text, areas, matches) {
++  const opens  = new Map()
++  const closes = new Map()
++  function addOpen(pos, tag)  { if (!opens.has(pos))  opens.set(pos, []);  opens.get(pos).push(tag) }
++  function addClose(pos, tag) { if (!closes.has(pos)) closes.set(pos, []); closes.get(pos).push(tag) }
++  for (const a of areas)   { addOpen(a.start, '<span class="hl-area">'); addClose(a.end, "</span>") }
++  for (const m of matches) { addOpen(m.start, "<mark>"); addClose(m.end, "</mark>") }
++  let out = ""
++  for (let i = 0; i <= text.length; i++) {
++    if (closes.has(i)) {
++      const list = closes.get(i)
++      for (let k = list.length - 1; k >= 0; k--) out += list[k]
++    }
++    if (opens.has(i)) for (const tag of opens.get(i)) out += tag
++    if (i < text.length) out += escChar(text[i])
++  }
++  return out
++}
++
++function areasFromMatches(text, matches, showAreas) {
++  if (!showAreas || matches.length === 0) return []
++  const tokens = tokenize(text)
++  const allUnits = findPredicateUnits(tokens)
++  return allUnits.filter(u =>
++    matches.some(m => m.start >= u.start && m.end <= u.end)
++  )
++}
++
++export function highlightSql(text, term, { caseInsensitive = true, showAreas = true } = {}) {
++  if (!term) {
++    return { html: escapeAll(text), areaCount: 0, matchCount: 0 }
++  }
++  const matches = findMatches(text, term, { caseInsensitive })
++  const areas = areasFromMatches(text, matches, showAreas)
++  const html = buildHighlightedHtml(text, areas, matches)
++  return { html, areaCount: areas.length, matchCount: matches.length }
++}
++
++export function highlightSqlMulti(text, terms, { caseInsensitive = true, showAreas = true } = {}) {
++  const valid = (terms || []).filter(Boolean)
++  if (valid.length === 0) {
++    return { html: escapeAll(text), areaCount: 0, matchCount: 0 }
++  }
++  const matches = findMatchesMulti(text, valid, { caseInsensitive })
++  const areas = areasFromMatches(text, matches, showAreas)
++  const html = buildHighlightedHtml(text, areas, matches)
++  return { html, areaCount: areas.length, matchCount: matches.length }
++}
++
++function escapeAll(text) {
++  let out = ""
++  for (const c of text) out += escChar(c)
++  return out
++}
++
++export function findPredicatesForObject(sql, objectName, aliasMap, objectColumns) {
++  if (!objectName) return []
++  const target = objectName.toLowerCase()
++  const aliases = Object.entries(aliasMap)
++    .filter(([, v]) => (v || "").toLowerCase() === target)
++    .map(([a]) => a)
++
++  const units = findPredicateUnits(tokenize(sql))
++  if (units.length === 0) return []
++
++  // 대상 오브젝트의 alias 집합 + 다른 오브젝트의 alias 집합
++  const myAliases = new Set(aliases.map(a => a.toLowerCase()))
++  const otherAliases = new Set(
++    Object.entries(aliasMap)
++      .filter(([, v]) => (v || "").toLowerCase() !== target)
++      .map(([a]) => a.toLowerCase())
++  )
++
++  // 결과 누적
++  const pickedKeys = new Set()
++  const picked = []
++  function add(u) {
++    const key = u.start + ":" + u.end
++    if (pickedKeys.has(key)) return
++    pickedKeys.add(key)
++    picked.push(u)
++  }
++
++  // ─── 1) 각 predicate 를 순회하며 3가지 근거 중 하나라도 만족하면 귀속 ───
++  const colList = Array.isArray(objectColumns) ? objectColumns.filter(Boolean) : []
++  const colRe = colList.length
++    ? new RegExp(
++        "(?:^|[^A-Za-z0-9_\\.])(" +
++        colList.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") +
++        ")(?=$|[^A-Za-z0-9_])",
++        "gi",
++      )
++    : null
++
++  for (const u of units) {
++    const text = sql.slice(u.start, u.end)
++    let matched = false
++
++    // (a) 내 alias 가 prefix 로 등장 (`o.order_date`, `c.customer_id` 등)
++    for (const a of myAliases) {
++      const re = new RegExp(
++        "(?:^|[^A-Za-z0-9_])(" + a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")(?=\\s*\\.)",
++        "i",
++      )
++      if (re.test(text)) { matched = true; break }
++      // alias 가 테이블 이름 자체일 수도 있음
++      const re2 = new RegExp(
++        "(?:^|[^A-Za-z0-9_])(" + a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")(?=$|[^A-Za-z0-9_])",
++        "i",
++      )
++      if (re2.test(text)) { matched = true; break }
++    }
++
++    // (b) alias prefix 가 전혀 없는 predicate 이고, 내 컬럼명이 포함됨
++    //     → 단일 테이블 맥락의 bare column 매칭
++    if (!matched && colRe) {
++      // 이 predicate 안에서 참조된 alias prefix 들을 수집
++      const prefRe = /\b([A-Za-z_]\w*)\s*\./g
++      let mm
++      const refs = []
++      while ((mm = prefRe.exec(text)) !== null) refs.push(mm[1].toLowerCase())
++      const hasMyPref = refs.some(r => myAliases.has(r))
++      const hasOnlyOtherPrefs = refs.length > 0 && refs.every(r => otherAliases.has(r))
++      // 이미 prefix 가 있으면 (a) 에서 잡혔을 것. 여기선 "prefix 없음" 인 경우만 column 매치 시도
++      if (!hasOnlyOtherPrefs) {
++        colRe.lastIndex = 0
++        if (colRe.test(text)) {
++          if (refs.length === 0 || hasMyPref) matched = true
++        }
++      }
++    }
++
++    if (matched) add(u)
++  }
++
++  // ─── 2) 그래도 하나도 없으면: 단일 테이블 SQL 전체 귀속 ───
++  if (picked.length === 0) {
++    const distinctObjects = new Set(
++      Object.values(aliasMap).map(v => (v || "").toLowerCase()).filter(Boolean)
++    )
++    if (distinctObjects.size === 1 && distinctObjects.has(target)) {
++      for (const u of units) add(u)
++    }
++  }
++
++  picked.sort((a, b) => a.start - b.start)
++  return picked.map(u => ({
++    clause: u.clause || "?",
++    text: sql.slice(u.start, u.end).trim(),
++    start: u.start,
++    end: u.end,
++  }))
++}
+diff --git a/src/lib/object-info/syntheticMeta.d.ts b/src/lib/object-info/syntheticMeta.d.ts
+new file mode 100644
+index 0000000..aa981be
+--- /dev/null
++++ b/src/lib/object-info/syntheticMeta.d.ts
+@@ -0,0 +1,2 @@
++import type { ObjectMeta, AliasMap } from './index'
++export function buildSyntheticMeta(sql: string, objectName: string, aliasMap: AliasMap): ObjectMeta
+diff --git a/src/lib/object-info/syntheticMeta.js b/src/lib/object-info/syntheticMeta.js
+new file mode 100644
+index 0000000..48ebf40
+--- /dev/null
++++ b/src/lib/object-info/syntheticMeta.js
+@@ -0,0 +1,157 @@
++// 오브젝트 메타가 없을 때 SQL 맥락에서 추출한 컬럼으로 합성.
++// v7의 OBJECT_META 포맷과 1:1 호환.
++
++import { tokenize } from './sqlHighlight.js'
++
++function titleCaseToType(col) {
++  const u = col.toUpperCase()
++  if (u.endsWith('_ID') || u === 'ID') return 'NUMBER(12)'
++  if (u.endsWith('_DATE') || u.endsWith('_AT') || u === 'DATE') return 'DATE'
++  if (u.endsWith('_AMOUNT') || u.endsWith('_PRICE') || u.endsWith('_TOTAL') || u === 'BALANCE' || u === 'SALARY') return 'NUMBER(14,2)'
++  if (u.endsWith('_QTY') || u === 'QUANTITY' || u === 'COUNT') return 'NUMBER(10)'
++  if (u.endsWith('_FLAG') || u === 'IS_ACTIVE') return 'CHAR(1)'
++  if (u.endsWith('_CODE') || u === 'STATUS' || u === 'TYPE' || u === 'CURRENCY') return 'VARCHAR2(20)'
++  if (u.endsWith('_NAME') || u.endsWith('_EMAIL') || u === 'NAME') return 'VARCHAR2(120)'
++  return 'VARCHAR2(60)'
++}
++
++// 해시 기반 의사-랜덤(같은 이름이면 항상 동일 수치)
++function hash(str) {
++  let h = 0
++  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0
++  return Math.abs(h)
++}
++
++function extractColumnsForObject(sql, objectName, aliasMap) {
++  const tokens = tokenize(sql)
++  const target = objectName.toLowerCase()
++  const aliases = Object.entries(aliasMap)
++    .filter(([, v]) => (v || '').toLowerCase() === target)
++    .map(([a]) => a.toLowerCase())
++  if (aliases.length === 0) aliases.push(target)
++
++  const cols = new Set()
++
++  // alias.COLUMN 패턴
++  for (let i = 0; i < tokens.length - 2; i++) {
++    const t = tokens[i]
++    const dot = tokens[i + 1]
++    const col = tokens[i + 2]
++    if (!t || !dot || !col) continue
++    if (t.type !== 'ident' || dot.type !== 'punct' || dot.value !== '.' || col.type !== 'ident') continue
++    if (!aliases.includes((t.value || '').toLowerCase())) continue
++    const v = (col.value || '').toUpperCase()
++    if (v === '*') continue
++    cols.add(v)
++  }
++
++  // 단일 테이블 SQL: alias prefix 없이 본문 식별자 전체에서 키워드 제외
++  const distinctObjs = new Set(Object.values(aliasMap).map(v => (v || '').toLowerCase()).filter(Boolean))
++  if (distinctObjs.size === 1 && distinctObjs.has(target) && cols.size === 0) {
++    const SQL_KW = new Set([
++      'SELECT','FROM','WHERE','AND','OR','NOT','IN','IS','NULL','BETWEEN','LIKE','AS','ON','USING',
++      'JOIN','LEFT','RIGHT','INNER','OUTER','FULL','CROSS','NATURAL','GROUP','BY','ORDER','HAVING',
++      'LIMIT','FETCH','OFFSET','UNION','INTERSECT','EXCEPT','MINUS','WITH','DISTINCT','ALL','CASE',
++      'WHEN','THEN','ELSE','END','EXISTS','ASC','DESC','COUNT','SUM','AVG','MIN','MAX','TRUNC',
++      'SYSDATE','ADD_MONTHS','TO_DATE','ROWNUM','DUAL','MOD','NVL','DECODE','COALESCE',
++    ])
++    for (const t of tokens) {
++      if (t.type !== 'ident') continue
++      const u = (t.value || '').toUpperCase()
++      if (!u || SQL_KW.has(u) || u === target.toUpperCase()) continue
++      if (/^[0-9]/.test(u)) continue
++      cols.add(u)
++    }
++  }
++
++  return Array.from(cols)
++}
++
++// WHERE/ON/HAVING 안에서 실제 필터·조인에 쓰인 컬럼만 추려서 인덱스 후보로
++function extractPredicateColumns(sql, cols) {
++  if (cols.length === 0) return []
++  const re = new RegExp(
++    '\\b(' + cols.map(c => c.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')).join('|') + ')\\b',
++    'gi',
++  )
++  // WHERE 이후 텍스트만 대충 긁어서 hit 순서 유지
++  const m = sql.match(/\b(WHERE|ON|HAVING)\b[\s\S]*$/i)
++  if (!m) return cols.slice(0, 3)
++  const seen = new Set()
++  const out = []
++  let x
++  while ((x = re.exec(m[0])) !== null) {
++    const u = x[1].toUpperCase()
++    if (!seen.has(u)) { seen.add(u); out.push(u) }
++  }
++  return out.length ? out : cols.slice(0, 3)
++}
++
++export function buildSyntheticMeta(sql, objectName, aliasMap) {
++  const upName = (objectName || 'UNKNOWN').toUpperCase()
++  const cols = extractColumnsForObject(sql, objectName, aliasMap)
++
++  // ID 컬럼 자동 추가
++  const idCol = `${upName}_ID`
++  const allCols = cols.includes(idCol) || cols.includes('ID') ? cols : [idCol, ...cols]
++
++  const h = hash(upName)
++  const rows = 1000 + (h % 9900000)
++  const avg = 60 + (h % 240)
++
++  const columnsMeta = allCols.map((name) => ({
++    name,
++    type: titleCaseToType(name),
++    nullable: !name.endsWith('_ID') && name !== 'ID' && !name.endsWith('_NAME'),
++    distinct: Math.max(1, Math.floor(rows / (1 + ((hash(name) % 500) || 1)))),
++    nullCount: name.endsWith('_ID') || name === 'ID' ? 0 : (hash(name) % Math.max(1, Math.floor(rows / 20))),
++  }))
++
++  const predCols = extractPredicateColumns(sql, allCols)
++  const idxs = []
++
++  // PK
++  idxs.push({
++    name: `PK_${upName}`,
++    type: 'UNIQUE',
++    columns: [allCols.includes(idCol) ? idCol : allCols[0]],
++  })
++
++  // AS-IS: 첫 predicate 컬럼
++  if (predCols.length >= 1) {
++    idxs.push({
++      name: `IDX_${upName}_${predCols[0]}`,
++      type: 'NORMAL',
++      columns: [predCols[0]],
++      planUsage: 'ASIS',
++      rationale: '현재 플랜: 단일 컬럼 필터/조인 키로 사용되는 기존 인덱스',
++    })
++  }
++
++  // TO-BE: predicate 컬럼들 + 주요 selection 컬럼 커버링
++  if (predCols.length >= 1) {
++    const tobeCols = predCols.slice(0, 3)
++    const covering = allCols.find(c => !tobeCols.includes(c) && (c.endsWith('_NAME') || c.endsWith('_AMOUNT') || c.endsWith('_DATE')))
++    if (covering) tobeCols.push(covering)
++    idxs.push({
++      name: `IDX_${upName}_${tobeCols.slice(0, 2).join('_')}_COV`,
++      type: 'NORMAL',
++      columns: tobeCols,
++      planUsage: 'TOBE',
++      isNew: true,
++      rationale: '제안 플랜: 필터·조인 키 + 선택 컬럼 커버링으로 IO 감소',
++    })
++  }
++
++  return {
++    name: upName,
++    type: 'TABLE',
++    schema: 'AUTO',
++    totalRows: rows,
++    avgRowBytes: avg,
++    lastAnalyzed: null,
++    note: '⚠️ 카탈로그 미등록 — SQL 본문에서 자동 합성된 메타정보입니다.',
++    columns: columnsMeta,
++    indexes: idxs,
++  }
++}
+diff --git a/src/pages/db/CasesDbPage.tsx b/src/pages/db/CasesDbPage.tsx
+new file mode 100644
+index 0000000..c81f77a
+--- /dev/null
++++ b/src/pages/db/CasesDbPage.tsx
+@@ -0,0 +1,170 @@
++import { useEffect, useState } from 'react'
++import SqlBlock from '../../components/object-info/SqlBlock'
++import {
++  fetchCases, fetchCase,
++  type TuningCaseSummary, type TuningCaseDetail,
++} from '../../lib/api'
++
++function fmt(ms: number | null) {
++  if (ms == null) return '-'
++  if (ms < 1000) return `${ms}ms`
++  if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`
++  return `${(ms / 60000).toFixed(1)}m`
++}
++
++export default function CasesDbPage() {
++  const [cases, setCases] = useState<TuningCaseSummary[]>([])
++  const [selected, setSelected] = useState<TuningCaseDetail | null>(null)
++  const [err, setErr] = useState<string | null>(null)
++  const [loading, setLoading] = useState(true)
++
++  useEffect(() => {
++    fetchCases()
++      .then((d) => { setCases(d); setLoading(false) })
++      .catch((e) => { setErr(String(e)); setLoading(false) })
++  }, [])
++
++  const open = (id: number) => {
++    fetchCase(id).then(setSelected).catch((e) => setErr(String(e)))
++  }
++
++  if (loading) return <div className="p-6 text-slate-600">Loading from DB...</div>
++  if (err) return <div className="p-6 text-red-600">Error: {err}</div>
++
++  return (
++    <div className="p-6 space-y-4">
++      <div>
++        <h1 className="text-lg font-semibold text-slate-900">Tuning Cases (PostgreSQL)</h1>
++        <p className="text-sm text-slate-500">
++          {cases.length} cases — live from FastAPI + PostgreSQL (backend :8000 → pg :5432)
++        </p>
++      </div>
++
++      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
++        <div className="border border-slate-200 rounded bg-white overflow-hidden">
++          <table className="w-full text-sm">
++            <thead className="bg-slate-50 text-slate-600">
++              <tr>
++                <th className="text-left px-3 py-2 w-10">#</th>
++                <th className="text-left px-3 py-2">Title</th>
++                <th className="text-left px-3 py-2">Category</th>
++                <th className="text-left px-3 py-2">Status</th>
++              </tr>
++            </thead>
++            <tbody>
++              {cases.map((c) => (
++                <tr
++                  key={c.id}
++                  onClick={() => open(c.id)}
++                  className={`border-t border-slate-100 cursor-pointer hover:bg-sky-50 ${
++                    selected?.id === c.id ? 'bg-sky-100' : ''
++                  }`}
++                >
++                  <td className="px-3 py-2 text-slate-500">{c.id}</td>
++                  <td className="px-3 py-2 text-slate-900">{c.title ?? '(no title)'}</td>
++                  <td className="px-3 py-2 text-slate-600">{c.category ?? '-'}</td>
++                  <td className="px-3 py-2">
++                    <span className="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">
++                      {c.status}
++                    </span>
++                  </td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++        </div>
++
++        <div className="border border-slate-200 rounded bg-white p-4 space-y-4">
++          {!selected && (
++            <div className="text-slate-500 text-sm">Select a case on the left to see SQL / Plan / Binds.</div>
++          )}
++          {selected && (
++            <>
++              <div>
++                <div className="text-xs text-slate-500">
++                  #{selected.id} · {selected.schema_name ?? '-'} · {selected.instance_name ?? '-'} · {selected.sql_id ?? '-'}
++                </div>
++                <div className="text-base font-semibold text-slate-900">{selected.title}</div>
++                {selected.rationale && (
++                  <div className="mt-2 text-sm text-slate-600">{selected.rationale}</div>
++                )}
++              </div>
++
++              <div>
++                <div className="text-xs font-medium text-slate-500 mb-1">SQL (Before) — 드래그 + F5로 Object Info</div>
++                <SqlBlock sql={selected.sql_text}>
++                  <pre className="text-xs bg-slate-50 p-3 rounded overflow-x-auto font-mono whitespace-pre select-text">
++{selected.sql_text}
++                  </pre>
++                </SqlBlock>
++              </div>
++
++              {selected.tuned_sql_text && (
++                <div>
++                  <div className="text-xs font-medium text-slate-500 mb-1">SQL (After)</div>
++                  <SqlBlock sql={selected.tuned_sql_text}>
++                    <pre className="text-xs bg-emerald-50 p-3 rounded overflow-x-auto font-mono whitespace-pre select-text">
++{selected.tuned_sql_text}
++                    </pre>
++                  </SqlBlock>
++                </div>
++              )}
++
++              <div>
++                <div className="text-xs font-medium text-slate-500 mb-1">
++                  Execution Plans ({selected.plans.length})
++                </div>
++                <div className="space-y-2">
++                  {selected.plans.map((p) => (
++                    <details key={p.id} className="border border-slate-200 rounded">
++                      <summary className="cursor-pointer px-3 py-2 text-xs bg-slate-50 flex gap-3">
++                        <span className={`font-semibold ${p.phase === 'after' ? 'text-emerald-700' : 'text-slate-700'}`}>
++                          [{p.phase}]
++                        </span>
++                        <span className="text-slate-500">hash {p.plan_hash ?? '-'}</span>
++                        <span className="text-slate-500">elapsed {fmt(p.elapsed_ms)}</span>
++                        {p.buffers != null && <span className="text-slate-500">buf {p.buffers.toLocaleString()}</span>}
++                      </summary>
++                      <pre className="text-[11px] font-mono p-3 overflow-x-auto">
++{p.plan_text}
++                      </pre>
++                      {p.note && <div className="px-3 pb-2 text-xs text-slate-500">{p.note}</div>}
++                    </details>
++                  ))}
++                </div>
++              </div>
++
++              <div>
++                <div className="text-xs font-medium text-slate-500 mb-1">
++                  Bind Variables ({selected.bind_variables.length})
++                </div>
++                {selected.bind_variables.length === 0 ? (
++                  <div className="text-xs text-slate-400">none</div>
++                ) : (
++                  <table className="w-full text-xs">
++                    <thead className="text-slate-500">
++                      <tr>
++                        <th className="text-left py-1">Name</th>
++                        <th className="text-left py-1">Type</th>
++                        <th className="text-left py-1">Value</th>
++                      </tr>
++                    </thead>
++                    <tbody>
++                      {selected.bind_variables.map((b) => (
++                        <tr key={b.id} className="border-t border-slate-100">
++                          <td className="py-1 font-mono text-slate-800">{b.name}</td>
++                          <td className="py-1 text-slate-600">{b.data_type}</td>
++                          <td className="py-1 font-mono text-slate-800">{b.value ?? '-'}</td>
++                        </tr>
++                      ))}
++                    </tbody>
++                  </table>
++                )}
++              </div>
++            </>
++          )}
++        </div>
++      </div>
++    </div>
++  )
++}
+diff --git a/vite.config.ts b/vite.config.ts
+index c286bd0..5477119 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
+ export default defineConfig({
+   plugins: [react(), tailwindcss()],
+   server: {
+-    port: 3009,
++    host: '0.0.0.0',
++    port: 3005,
+   },
+ })

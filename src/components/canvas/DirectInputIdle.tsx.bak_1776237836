@@ -1,0 +1,796 @@
+import { useMemo, useState, useRef, useEffect } from 'react'
+import { Send, Database, Download, RefreshCw, Plus, X, Play } from 'lucide-react'
+import { fetchBindsByMock, type BindSnapshot } from '../../lib/mockBindLoader'
+import { useObjectInfo } from '../object-info/ObjectInfoContext'
+import { getObjectMeta } from '../../lib/object-info/objectMeta'
+import { buildAliasMap } from '../../lib/object-info/aliasResolver'
+
+function tokenize(text: string): { type: 'ident' | 'other'; text: string }[] {
+  const out: { type: 'ident' | 'other'; text: string }[] = []
+  const re = /([A-Za-z_][A-Za-z0-9_]*)|('[^']*')|([\s\S])/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    if (m[1]) out.push({ type: 'ident', text: m[1] })
+    else out.push({ type: 'other', text: m[0] })
+  }
+  return out
+}
+
+const HL_BG = '#FEF08A'
+const HL_FG = '#78350F'
+
+interface Props {
+  sql: string
+  sqlId: string
+  instance: string
+  schema: string
+  instances: string[]
+  schemas: string[]
+  canSubmit: boolean
+  onSqlChange: (v: string) => void
+  onSqlIdChange: (v: string) => void
+  onInstanceChange: (v: string) => void
+  onSchemaChange: (v: string) => void
+  onSubmit: () => void
+}
+
+function HlToken({ text, highlightTerm, onPick }: { text: string; highlightTerm: string; onPick: (t: string) => void }) {
+  const hit = !!highlightTerm && text.toLowerCase() === highlightTerm.toLowerCase()
+  return (
+    <span
+      onClick={() => onPick(text)}
+      style={hit ? { backgroundColor: HL_BG, color: HL_FG } : undefined}
+      className={`cursor-pointer ${hit ? 'font-semibold' : 'hover:bg-sky-50'}`}
+    >
+      {text}
+    </span>
+  )
+}
+
+/** 하이라이트 오버레이 + 투명 textarea = 편집+하이라이트 동시 지원 */
+function SqlEditor({
+  sql, onChange, highlightTerm, onPick, onDragSelect, editable,
+}: {
+  sql: string
+  onChange: (v: string) => void
+  highlightTerm: string
+  onPick: (t: string) => void
+  onDragSelect: (t: string) => void
+  editable: boolean
+}) {
+  const tokens = useMemo(() => tokenize(sql || ''), [sql])
+  const preRef = useRef<HTMLPreElement>(null)
+  const taRef = useRef<HTMLTextAreaElement>(null)
+
+  // textarea 스크롤 → pre 에 복제
+  const syncScroll = () => {
+    if (preRef.current && taRef.current) {
+      preRef.current.scrollTop = taRef.current.scrollTop
+      preRef.current.scrollLeft = taRef.current.scrollLeft
+    }
+  }
+
+  // 공통 타이포 스타일 (두 요소가 100% 같아야 함)
+  const typo: React.CSSProperties = {
+    fontFamily: 'JetBrains Mono, ui-monospace, Menlo, Consolas, monospace',
+    fontSize: '13px',
+    lineHeight: '1.65',
+    padding: '16px 20px',
+    margin: 0,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    tabSize: 2,
+  }
+
+  // 드래그 선택 → 하이라이트
+  const handleSelectionEnd = () => {
+    let picked = ''
+    const active = document.activeElement
+    if (active instanceof HTMLTextAreaElement && active === taRef.current) {
+      const s = active.selectionStart ?? 0
+      const e = active.selectionEnd ?? 0
+      if (e > s) picked = active.value.substring(s, e).trim()
+    } else {
+      const sel = window.getSelection()
+      if (sel && sel.rangeCount > 0) picked = sel.toString().trim()
+    }
+    if (!picked) return
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked)) {
+      onDragSelect(picked)
+    }
+  }
+
+  return (
+    <div
+      className="relative"
+      data-sql-source={sql}
+      onMouseUp={handleSelectionEnd}
+      onKeyUp={(e) => { if (e.shiftKey) handleSelectionEnd() }}
+    >
+      {/* 하이라이트 pre — 뒤에 깔림, 실제 글자 렌더 */}
+      <pre
+        ref={preRef}
+        aria-hidden="true"
+        style={{ ...typo, minHeight: 320, maxHeight: '60vh' }}
+        className="absolute inset-0 overflow-auto text-slate-900 bg-white"
+      >
+        {tokens.map((t, i) => {
+          if (t.type !== 'ident') return <span key={i}>{t.text}</span>
+          return (
+            <HlToken
+              key={i}
+              text={t.text}
+              highlightTerm={highlightTerm}
+              onPick={onPick}
+            />
+          )
+        })}
+        {/* trailing newline 보정: textarea 커서가 마지막 줄에서 내려갔을 때 pre 높이가 한 줄 모자라지 않도록 */}
+        {'\n'}
+      </pre>
+
+      {/* 투명 textarea — 입력 이벤트 캡처, 글자는 투명 */}
+      <textarea
+        ref={taRef}
+        value={sql}
+        onChange={e => onChange(e.target.value)}
+        onScroll={syncScroll}
+        readOnly={!editable}
+        spellCheck={false}
+        style={{
+          ...typo,
+          minHeight: 320,
+          maxHeight: '60vh',
+          color: 'transparent',
+          background: 'transparent',
+          caretColor: editable ? '#0F172A' : 'transparent',
+          resize: 'none',
+          border: 'none',
+          outline: 'none',
+          width: '100%',
+          pointerEvents: editable ? 'auto' : 'none',
+        }}
+        className="relative overflow-auto selection:bg-sky-200/60 selection:text-slate-900"
+        placeholder={editable ? 'SELECT * FROM orders WHERE order_date > :dt' : ''}
+      />
+    </div>
+  )
+}
+
+export default function DirectInputIdle({
+  sql, sqlId, instance, schema, instances, schemas, canSubmit,
+  onSqlChange, onSqlIdChange, onInstanceChange, onSchemaChange, onSubmit,
+}: Props) {
+  const { colTerm: highlightTerm, setColTerm, setShowToBe, open: openObjectInfo } = useObjectInfo()
+  // 직접입력 = 튜닝 전, TO-BE 인덱스 숨김
+  useEffect(() => {
+    setShowToBe(false)
+    return () => setShowToBe(true)
+  }, [setShowToBe])
+
+  // 하단 탭: '수행결과' | 'Plan'
+  const [bottomTab, setBottomTab] = useState<'result' | 'plan'>('result')
+  // 실행 상태 & 결과
+  const [executing, setExecuting] = useState(false)
+  const [execResult, setExecResult] = useState<null | {
+    rows: Array<Record<string, string | number>>
+    columns: string[]
+    elapsedMs: number
+    fetchedRows: number
+  }>(null)
+
+  async function handleExecute() {
+    if (!sql.trim() || executing) return
+    setExecuting(true)
+    await new Promise(r => setTimeout(r, 450))
+
+    // 1) SQL SELECT 절에서 alias.COLUMN 또는 COLUMN 추출
+    const aliasMap = buildAliasMap(sql)
+    // 첫 번째 테이블(메인)의 OBJECT_META 컬럼을 기준으로 사용
+    const firstTable = Object.values(aliasMap)[0]
+    const mainMeta = firstTable ? getObjectMeta(firstTable) : null
+
+    // 2) SELECT 절 파싱: 'SELECT' 부터 'FROM' 까지
+    const selMatch = sql.match(/SELECT\s+([\s\S]*?)\s+FROM/i)
+    let columns: string[] = []
+    if (selMatch) {
+      const selClause = selMatch[1]
+      // SELECT * 인 경우
+      if (/^\s*\*\s*$/.test(selClause) || /^\s*[a-z]\.\*\s*$/i.test(selClause)) {
+        columns = mainMeta?.columns.map(c => c.name) || []
+      } else {
+        // alias.col, col as alias, col 형태 파싱
+        const items = selClause.split(',').map(s => s.trim())
+        for (const it of items) {
+          const m = it.match(/(?:[A-Za-z_]\w*\s*\.\s*)?([A-Za-z_]\w*)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?$/i)
+          if (m) columns.push((m[2] || m[1]).toUpperCase())
+        }
+      }
+    }
+    if (columns.length === 0 && mainMeta) {
+      columns = mainMeta.columns.slice(0, 6).map(c => c.name)
+    }
+    if (columns.length === 0) columns = ['ID', 'NAME', 'VALUE']
+
+    // 3) 각 컬럼 타입을 catalog 에서 가져와 샘플 값 생성
+    const colMeta = new Map<string, { type: string; nullable: boolean }>()
+    if (mainMeta) {
+      for (const c of mainMeta.columns) colMeta.set(c.name, { type: c.type, nullable: c.nullable })
+    }
+
+    function sampleFor(col: string, rowIdx: number): string | number {
+      const meta = colMeta.get(col)
+      const type = (meta?.type || '').toUpperCase()
+      const u = col.toUpperCase()
+      if (type.startsWith('NUMBER')) {
+        if (u.endsWith('_ID') || u === 'ID') return 1000000 + rowIdx * 17
+        if (u.endsWith('_AMOUNT') || u.endsWith('_PRICE') || u.endsWith('_TOTAL') || u === 'BALANCE') {
+          return (Math.random() * 90000 + 100).toFixed(2)
+        }
+        return Math.floor(Math.random() * 10000)
+      }
+      if (type.startsWith('DATE') || type.includes('TIMESTAMP')) {
+        const d = new Date(2026, 3, 1 + (rowIdx % 28), 9, 30, 0)
+        return d.toISOString().replace('T', ' ').slice(0, 19)
+      }
+      if (type.startsWith('CHAR')) {
+        if (u === 'STATUS' || u.endsWith('_FLAG')) return ['Y', 'N', 'Y', 'Y'][rowIdx % 4]
+        return ['KR', 'US', 'JP', 'CN'][rowIdx % 4]
+      }
+      if (type.startsWith('VARCHAR2')) {
+        if (u.endsWith('_NAME')) return `${col.replace('_NAME', '').toLowerCase()}_${rowIdx + 1}`
+        if (u === 'STATUS') return ['ACTIVE', 'PENDING', 'CLOSED', 'HOLD'][rowIdx % 4]
+        if (u === 'CURRENCY') return ['KRW', 'USD', 'JPY', 'EUR'][rowIdx % 4]
+        return `${col.toLowerCase()}_${rowIdx + 1}`
+      }
+      // fallback
+      return `${col}_${rowIdx + 1}`
+    }
+
+    const rows = Array.from({ length: 10 }, (_, i) => {
+      const row: Record<string, string | number> = {}
+      for (const c of columns) row[c] = sampleFor(c, i)
+      return row
+    })
+
+    setExecResult({
+      rows,
+      columns,
+      elapsedMs: 120 + Math.floor(Math.random() * 180),
+      fetchedRows: rows.length,
+    })
+    setExecuting(false)
+    setBottomTab('result')
+  }
+
+  // Plan mock: DBMS_XPLAN.DISPLAY_CURSOR(null,null,'ALLSTATS LAST') 포맷 생성
+  const planText = useMemo(() => {
+    if (!sql.trim()) return ''
+    const tables = Array.from(new Set(
+      (sql.match(/(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)/gi) || [])
+        .map(m => m.split(/\s+/)[1].toUpperCase())
+    ))
+    if (tables.length === 0) return '-- SQL 을 먼저 입력하세요'
+
+    const sqlId = 'a' + Math.random().toString(36).slice(2, 14)
+    const hashVal = String(Math.floor(Math.random() * 9e9))
+    const compact = sql.replace(/\s+/g, ' ').trim().slice(0, 110)
+
+    // 출력 포맷 (공백 너비 고정) — DBMS_XPLAN.DISPLAY_CURSOR ALLSTATS LAST
+    //  | Id  | Operation | Name | Starts | E-Rows | A-Rows |  A-Time    | Buffers |  Reads | OMem | 1Mem | Used-Mem |
+    const colSpec = [
+      { name: 'Id',       w: 5,  align: 'right' },
+      { name: 'Operation',w: 26, align: 'left'  },
+      { name: 'Name',     w: 18, align: 'left'  },
+      { name: 'Starts',   w: 7,  align: 'right' },
+      { name: 'E-Rows',   w: 7,  align: 'right' },
+      { name: 'A-Rows',   w: 7,  align: 'right' },
+      { name: 'A-Time',   w: 12, align: 'right' },
+      { name: 'Buffers',  w: 9,  align: 'right' },
+      { name: 'Reads',    w: 7,  align: 'right' },
+      { name: 'OMem',     w: 7,  align: 'right' },
+      { name: '1Mem',     w: 7,  align: 'right' },
+      { name: 'Used-Mem', w: 12, align: 'right' },
+    ]
+    const fmtCell = (v: string, c: { w: number; align: string }) =>
+      c.align === 'right' ? v.padStart(c.w) : v.padEnd(c.w)
+    const row = (vals: string[]) =>
+      '| ' + vals.map((v, i) => fmtCell(v, colSpec[i])).join(' | ') + ' |'
+    const header = row(colSpec.map(c => c.name))
+    const sep = '-'.repeat(header.length)
+
+    const lines: string[] = []
+    lines.push(`SQL_ID  ${sqlId}, child number 0`)
+    lines.push('-------------------------------------')
+    lines.push(compact)
+    lines.push('')
+    lines.push(`Plan hash value: ${hashVal}`)
+    lines.push('')
+    lines.push(sep)
+    lines.push(header)
+    lines.push(sep)
+
+    // Random but plausible stats
+    const rnd = (min: number, max: number) => Math.floor(Math.random() * (max - min) + min)
+    const fmtNum = (n: number) => {
+      if (n >= 1_000_000) return Math.floor(n / 1_000_000) + 'M'
+      if (n >= 1_000) return Math.floor(n / 1_000) + 'K'
+      return String(n)
+    }
+    const fmtTime = (ms: number) => {
+      const s = (ms / 1000).toFixed(2)
+      return '00:00:' + s.padStart(5, '0')
+    }
+
+    // Root
+    const rootBuffers = rnd(40000, 200000)
+    const rootARows = rnd(500, 900000)
+    const rootATime = rnd(300, 3000)
+    lines.push(row(['0', 'SELECT STATEMENT', '', '1', '', fmtNum(rootARows), fmtTime(rootATime), fmtNum(rootBuffers), '', '', '', '']))
+
+    // For each table, emit NL/HASH JOIN + TABLE ACCESS FULL / INDEX entries
+    let id = 1
+    tables.forEach((t, i) => {
+      const starts = i === 0 ? 1 : rnd(1, 10)
+      const erows = rnd(500, 900000)
+      const arows = rnd(500, 900000)
+      const aTime = rnd(50, rootATime)
+      const buffers = rnd(100, rootBuffers)
+      const reads = rnd(0, 50)
+
+      if (i === 0) {
+        // leaf 테이블
+        lines.push(row([
+          '* ' + id, 'TABLE ACCESS FULL', t,
+          String(starts), fmtNum(erows), fmtNum(arows), fmtTime(aTime), fmtNum(buffers), fmtNum(reads),
+          '', '', '',
+        ]))
+        id++
+      } else {
+        // HASH JOIN + inner leaf
+        const oMem = rnd(512, 4096)
+        const mem1 = rnd(256, 2048)
+        const used = rnd(100, 1500)
+        lines.push(row([
+          '* ' + id, 'HASH JOIN', '',
+          String(starts), fmtNum(erows), fmtNum(arows), fmtTime(aTime), fmtNum(buffers), fmtNum(reads),
+          fmtNum(oMem * 1024) + ' ', fmtNum(mem1 * 1024) + ' ', fmtNum(used * 1024) + ' (0)',
+        ]))
+        id++
+        lines.push(row([
+          ' ' + id, '  TABLE ACCESS FULL', t,
+          String(rnd(1, 5)), fmtNum(erows / 2), fmtNum(arows / 2), fmtTime(aTime / 2), fmtNum(buffers / 2), fmtNum(reads),
+          '', '', '',
+        ]))
+        id++
+      }
+    })
+
+    lines.push(sep)
+    lines.push('')
+
+    // Predicate Information
+    const whereMatch = sql.match(/WHERE\s+([\s\S]*?)(?:\s+GROUP|\s+ORDER|\s*;?\s*$)/i)
+    if (whereMatch) {
+      lines.push('Predicate Information (identified by operation id):')
+      lines.push('---------------------------------------------------')
+      const preds = whereMatch[1].split(/\s+AND\s+/i).slice(0, 4)
+      preds.forEach((p, i) => {
+        const cleaned = p.trim().replace(/\(/g, '(').replace(/\)/g, ')')
+        const predType = cleaned.includes('=') && cleaned.includes('.') ? 'access' : 'filter'
+        lines.push(`   ${i + 1} - ${predType}(${cleaned})`)
+      })
+      lines.push('')
+    }
+
+    // Column Projection (간략)
+    lines.push('Column Projection Information (identified by operation id):')
+    lines.push('-----------------------------------------------------------')
+    lines.push(`   1 - "${tables[0]}".ROWID[ROWID,10]`)
+    lines.push('')
+
+    // Note
+    lines.push('Note')
+    lines.push('-----')
+    lines.push('   - dynamic statistics used: dynamic sampling (level=2)')
+    lines.push('   - this is an execution statistics plan (AS-IS, ALLSTATS LAST)')
+
+    return lines.join('\n')
+  }, [sql])
+
+  const togglePick = (t: string) => setColTerm(highlightTerm === t ? '' : t)
+
+  // Bind 스냅샷 문자열 파싱 — "1(:name)=value, 2(:name)=value" 형식
+  function parseBindValues(s: string): Record<string, string> {
+    const out: Record<string, string> = {}
+    // 매칭: N(:name)=value  (value 는 괄호 안 쉼표 허용)
+    const re = /\d+\((:[A-Za-z_]\w*|:\d+)\)=((?:[^,()]|\([^)]*\))+)/g
+    let m
+    while ((m = re.exec(s)) !== null) {
+      const name = m[1].slice(1) // strip leading ":"
+      out[name] = m[2].trim()
+    }
+    return out
+  }
+
+  const [selectedSnapId, setSelectedSnapId] = useState<number | null>(null)
+  function applySnapshot(b: BindSnapshot) {
+    const parsed = parseBindValues(b.bindValues)
+    setManualValues(prev => ({ ...prev, ...parsed }))
+    setSelectedSnapId(b.snapId)
+  }
+
+  // F4 textarea 지원 — 편집 모드에서도 전역 Object Info 패널이 열리도록
+  // textarea selection 을 window selection 으로 복제
+  const sqlAreaRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'F7') {
+        e.preventDefault()
+        handleExecuteRef.current()
+        return
+      }
+      if (e.key !== 'F4') return
+      // 1) textarea 안에서 드래그 선택 후 F4
+      const active = document.activeElement
+      if (active instanceof HTMLTextAreaElement && sqlAreaRef.current?.contains(active)) {
+        const s = active.selectionStart ?? 0
+        const eIdx = active.selectionEnd ?? 0
+        const picked = active.value.substring(s, eIdx).trim()
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked)) {
+          e.preventDefault()
+          openObjectInfo({ sql: active.value, term: picked })
+        }
+        return
+      }
+      // 2) DOM range 선택 (보기 모드 / 다른 영역) — 전역 핸들러가 처리하므로 여기선 통과
+      // 단, 브라우저 새로고침 방지를 위해 sqlAreaRef 내에 selection 이 있으면 preventDefault
+      const sel = window.getSelection()
+      if (sel && sel.rangeCount > 0) {
+        const anchor = sel.anchorNode
+        const node = anchor instanceof Element ? anchor : anchor?.parentElement
+        if (node && sqlAreaRef.current?.contains(node)) {
+          const picked = sel.toString().trim()
+          if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked)) {
+            e.preventDefault()
+            // 전역 핸들러가 잡지 않는 케이스를 대비해 직접 open
+            const sqlVal = sql
+            openObjectInfo({ sql: sqlVal, term: picked })
+          }
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const handleExecuteRef = useRef<() => void>(() => {})
+  handleExecuteRef.current = handleExecute
+
+  // Bind loading
+  const [binds, setBinds] = useState<BindSnapshot[]>([])
+  const [bindLoading, setBindLoading] = useState(false)
+  const [bindError, setBindError] = useState<string | null>(null)
+  async function loadBinds() {
+    if (!sqlId.trim()) { setBindError('SQL ID 먼저 입력'); return }
+    setBindError(null); setBindLoading(true)
+    try {
+      const raw = await fetchBindsByMock(sqlId.trim())
+      // SQL 본문에서 자동 감지된 bind 이름 기준으로 재구성
+      // :param_name → 해시 기반 가상 값 생성 (각 스냅샷마다 다른 값)
+      const filtered = raw.map(snap => {
+        if (detectedBinds.length === 0) return snap
+        const pairs = detectedBinds.map((name, idx) => {
+          // 스냅샷별로 다른 mock 값 부여
+          const seed = (snap.snapId + idx * 31 + name.length * 7) % 1000
+          const isDate = /date|dt|at|time/i.test(name)
+          const val = isDate
+            ? `TO_DATE('2026-04-${String((seed % 28) + 1).padStart(2, '0')}','YYYY-MM-DD')`
+            : /^\d+$/.test(name)
+              ? String(1000 + seed)
+              : `'${name.toUpperCase()}_${seed}'`
+          return `${idx + 1}(:${name})=${val}`
+        })
+        return { ...snap, bindValues: pairs.join(', ') }
+      })
+      setBinds(filtered)
+    }
+    catch (e) { setBindError(String(e)) }
+    finally { setBindLoading(false) }
+  }
+
+  // SQL에서 :bind 이름 자동 추출 → 사용자는 값만 채움
+  const detectedBinds = useMemo(() => {
+    const names = new Set<string>()
+    const re = /(?<![:\w]):([A-Za-z_]\w*|\d+)/g
+    let m
+    while ((m = re.exec(sql)) !== null) names.add(m[1])
+    return Array.from(names)
+  }, [sql])
+  const [manualValues, setManualValues] = useState<Record<string, string>>({})
+  const updateManualValue = (name: string, v: string) => setManualValues(m => ({ ...m, [name]: v }))
+
+  return (
+    <div className="flex-1 flex flex-col overflow-auto" style={{ minHeight: 'calc(100vh - 120px)' }}>
+      <div
+        className="p-4 grid gap-4 items-start"
+        style={{
+          gridTemplateColumns: 'minmax(0, 1fr) 340px',
+          gridTemplateRows: 'auto auto',
+        }}
+      >
+        {/* ═══ 좌측 상단: SQL Text ═══ */}
+        <div className="flex flex-col min-w-0 gap-3" style={{ gridColumn: '1 / 2', gridRow: '1 / 2' }}>
+
+          {/* 메타 바 */}
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-slate-500 font-medium">SQL ID</span>
+              <input
+                value={sqlId}
+                onChange={e => onSqlIdChange(e.target.value)}
+                placeholder="abc123def456"
+                className="font-mono text-xs bg-white border border-slate-300 rounded px-2 py-1 w-36 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-slate-500 font-medium">Instance</span>
+              <select value={instance} onChange={e => onInstanceChange(e.target.value)} className="text-xs bg-white border border-slate-300 rounded px-2 py-1 outline-none">
+                {instances.map(o => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-slate-500 font-medium">Schema</span>
+              <select value={schema} onChange={e => onSchemaChange(e.target.value)} className="text-xs bg-white border border-slate-300 rounded px-2 py-1 outline-none">
+                {schemas.map(o => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div className="flex-1" />
+            <div className="flex flex-col items-end gap-0.5 text-[11px] text-slate-400 italic">
+              <span className="flex items-center gap-1" title="오브젝트 또는 식별자를 드래그한 뒤 F4 키를 눌러 카탈로그 정보를 확인하세요">
+                💡 Object 정보 보기 : <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-300 text-[10px] text-slate-700 font-mono">F4</kbd>
+              </span>
+              <span className="flex items-center gap-1" title="F7 키로 SQL 을 실행하고 결과 탭에서 확인하세요">
+                ▶ SQL 실행 : <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-300 text-[10px] text-slate-700 font-mono">F7</kbd>
+              </span>
+            </div>
+          </div>
+
+          <div
+            ref={sqlAreaRef}
+            className="flex flex-col rounded-lg border border-slate-300 bg-white overflow-hidden focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500/30"
+          >
+            <SqlEditor
+              sql={sql}
+              onChange={onSqlChange}
+              highlightTerm={highlightTerm}
+              onPick={togglePick}
+              onDragSelect={(t) => setColTerm(t)}
+              editable={true}
+            />
+            <div className="flex items-center gap-2 border-t border-slate-200 px-3 py-2">
+              <Database size={12} className="text-slate-400" />
+              <span className="text-[11px] text-slate-500">{instance} · {schema}</span>
+              <div className="flex-1" />
+              <button
+                onClick={handleExecute}
+                disabled={!sql.trim() || executing}
+                className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-semibold transition-colors ${
+                  !sql.trim() || executing
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-sky-600 text-white hover:bg-sky-700'
+                }`}
+              >
+                {executing ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />}
+                실행
+              </button>
+              <button
+                onClick={onSubmit}
+                disabled={!canSubmit}
+                className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-semibold transition-colors ${
+                  canSubmit
+                    ? 'bg-slate-900 text-white hover:bg-slate-800'
+                    : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                <Send size={12} />
+                튜닝 요청
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ═══ 우측 상단: Bind 변수 ═══ */}
+        <div className="flex flex-col gap-3 h-full" style={{ gridColumn: '2 / 3', gridRow: '1 / 2' }}>
+          <div className="rounded-lg border border-slate-300 bg-white flex flex-col overflow-hidden h-full">
+            <div className="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold text-slate-700">Bind 변수</div>
+                <span className="text-[10px] text-slate-400">DBA_HIST_SQLBIND</span>
+              </div>
+            </div>
+
+            <div className="px-4 py-3 border-b border-slate-200 space-y-2">
+              <button
+                onClick={loadBinds}
+                disabled={bindLoading || !sqlId.trim()}
+                className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold transition-colors ${
+                  !sqlId.trim() || bindLoading
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-sky-600 text-white hover:bg-sky-700'
+                }`}
+              >
+                {bindLoading ? <RefreshCw size={12} className="animate-spin" /> : <Download size={12} />}
+                Bind 변수 불러오기
+              </button>
+              {bindError && <div className="text-[11px] text-red-600">{bindError}</div>}
+              {!sqlId.trim() && (
+                <div className="text-[10px] text-slate-400">SQL ID 입력 후 사용 가능</div>
+              )}
+            </div>
+
+            <div className="overflow-y-auto flex-1">
+              {binds.length === 0 && !bindLoading && (
+                <div className="p-4 text-[11px] text-slate-400">로드된 Bind 스냅샷이 없습니다</div>
+              )}
+              {binds.map((b) => {
+                const isSel = selectedSnapId === b.snapId
+                return (
+                  <div
+                    key={`${b.snapId}-${b.instId}`}
+                    onClick={() => applySnapshot(b)}
+                    title="클릭하여 수동 입력에 적용"
+                    className={`group px-4 py-2.5 border-b border-l-2 border-slate-100 cursor-pointer transition-colors ${
+                      isSel
+                        ? 'bg-sky-50 border-l-sky-500'
+                        : 'border-l-transparent hover:bg-sky-50 hover:border-l-sky-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-[10px] text-slate-500">
+                      <span className="group-hover:text-slate-900">{b.snapTime}</span>
+                      <span>
+                        #{b.snapId} · inst{b.instId}
+                        {isSel && <span className="ml-1.5 text-sky-700 font-semibold">✓ 적용됨</span>}
+                      </span>
+                    </div>
+                    <div className="mt-1 font-mono text-[11px] text-slate-800 break-all group-hover:text-slate-900">
+                      {b.bindValues}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="border-t border-slate-200 px-4 py-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] text-slate-500 font-medium">수동 입력</div>
+                <span className="text-[10px] text-slate-400">
+                  SQL 에서 자동 감지된 {detectedBinds.length} 개
+                </span>
+              </div>
+              {detectedBinds.length === 0 ? (
+                <div className="text-[10px] text-slate-400">SQL 에 <code>:param</code> 형식의 bind 가 없습니다</div>
+              ) : (
+                detectedBinds.map(name => (
+                  <div key={name} className="flex items-center gap-2">
+                    <code className="shrink-0 font-mono text-[11px] text-sky-700 bg-sky-50 px-1.5 py-1 rounded">
+                      :{name}
+                    </code>
+                    <input
+                      value={manualValues[name] || ''}
+                      onChange={e => updateManualValue(name, e.target.value)}
+                      placeholder="value"
+                      className="flex-1 min-w-0 font-mono text-[11px] bg-white border border-slate-300 rounded px-1.5 py-1 outline-none focus:border-sky-500"
+                    />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+
+        {/* ═══ 하단 탭: 수행결과 | Plan ═══ */}
+        <div
+        className="flex flex-col rounded-lg border border-slate-300 bg-white overflow-hidden"
+        style={{ gridColumn: '1 / 3', gridRow: '2 / 3' }}
+        >
+          <div className="flex border-b border-slate-200 bg-slate-50">
+            <button
+              onClick={() => setBottomTab('result')}
+              className={`px-4 py-2 text-xs font-semibold transition-colors ${
+                bottomTab === 'result'
+                  ? 'bg-white text-slate-900 border-b-2 border-sky-500 -mb-px'
+                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              수행 결과
+              {execResult && <span className="ml-1 text-[10px] text-slate-400">({execResult.fetchedRows}행)</span>}
+            </button>
+            <button
+              onClick={() => setBottomTab('plan')}
+              className={`px-4 py-2 text-xs font-semibold transition-colors ${
+                bottomTab === 'plan'
+                  ? 'bg-white text-slate-900 border-b-2 border-sky-500 -mb-px'
+                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              Plan
+            </button>
+            <div className="flex-1" />
+            {bottomTab === 'result' && execResult && (
+              <div className="flex items-center gap-3 pr-4 text-[10px] text-slate-500">
+                <span>elapsed <code className="text-slate-700">{execResult.elapsedMs}ms</code></span>
+                <span>rows <code className="text-slate-700">{execResult.fetchedRows}</code></span>
+              </div>
+            )}
+          </div>
+
+          <div className="overflow-auto" style={{ minHeight: 320, maxHeight: '48vh' }}>
+            {bottomTab === 'result' && (
+              <>
+                {!execResult ? (
+                  <div
+                    className="flex items-center justify-center text-[11px] text-slate-400"
+                    style={{ minHeight: 320 }}
+                  >
+                    <div className="text-center space-y-2">
+                      <Play size={24} className="mx-auto text-slate-300" />
+                      <div>실행 버튼을 눌러 결과를 확인하세요</div>
+                    </div>
+                  </div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-slate-600 sticky top-0">
+                      <tr>
+                        {execResult.columns.map(c => {
+                          const hit = !!highlightTerm && c.toLowerCase() === highlightTerm.toLowerCase()
+                          return (
+                            <th
+                              key={c}
+                              onClick={() => togglePick(c)}
+                              className="text-left px-3 py-1.5 font-mono font-semibold cursor-pointer hover:bg-sky-100"
+                              style={hit ? { backgroundColor: HL_BG, color: HL_FG } : undefined}
+                            >
+                              {c}
+                            </th>
+                          )
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {execResult.rows.map((r, i) => (
+                        <tr key={i} className="border-t border-slate-100 hover:bg-sky-50">
+                          {execResult.columns.map(c => {
+                            const colHit = !!highlightTerm && c.toLowerCase() === highlightTerm.toLowerCase()
+                            const val = String(r[c])
+                            return (
+                              <td key={c} className="px-3 py-1.5 font-mono text-slate-800" style={colHit ? { backgroundColor: HL_BG } : undefined}>
+                                {tokenize(val).map((t, k) => {
+                                  if (t.type !== 'ident') return <span key={k}>{t.text}</span>
+                                  return <HlToken key={k} text={t.text} highlightTerm={highlightTerm} onPick={togglePick} />
+                                })}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+            {bottomTab === 'plan' && (
+              <pre className="p-4 font-mono text-[11px] text-slate-800 whitespace-pre leading-[1.55]">
+                {tokenize(planText || '-- SQL 을 먼저 입력하세요').map((t, i) => {
+                  if (t.type !== 'ident') return <span key={i}>{t.text}</span>
+                  return <HlToken key={i} text={t.text} highlightTerm={highlightTerm} onPick={togglePick} />
+                })}
+              </pre>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

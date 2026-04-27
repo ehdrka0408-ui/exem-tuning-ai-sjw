@@ -1,0 +1,307 @@
+@import "tailwindcss";
+
+@theme {
+  /* ═════════════════════════════════════════════════════════════════ */
+  /*  GCP Console — Cool Analytical Palette                              */
+  /*  방향: 순백 배경 + Google Blue 단일 액센트. 깔끔한 데이터 콘솔.     */
+  /*  Dominant: pure white + GCP blue. Warm은 warning/danger 격리.      */
+  /* ═════════════════════════════════════════════════════════════════ */
+
+  /* ─── Neutral (GCP Console — gentle cool grays) ─── */
+  --color-surface: #FFFFFF;        /* page background — pure white (GCP) */
+  --color-surface-alt: #F8F9FA;    /* hover, subtle surface (Google grey-50) */
+  --color-surface-muted: #F1F3F4;  /* selected, fill (Google grey-100) */
+  --color-border: #DADCE0;         /* GCP standard border */
+  --color-text-muted: #80868B;     /* tertiary text (Google grey-500) */
+  --color-text-secondary: #5F6368; /* secondary text (Google grey-700) */
+  --color-text-primary: #202124;   /* primary text (Google grey-900) */
+
+  /* ─── Action: Google Blue (GCP Console primary CTA) ─── */
+  --color-action: #1A73E8;         /* GCP blue */
+  --color-action-hover: #1557B0;   /* GCP blue dark */
+
+  /* ─── Brand: 폐기 (2026-04-09). 로고는 blue "E" 글자로 대체. ─── */
+  /* --color-brand: #FF470E;  REMOVED */
+  /* --color-brand-hover: #E63E0B;  REMOVED */
+
+  /* ─── Semantic: Success — 반영완료 (emerald: cool-leaning green) ─── */
+  --color-success-bg: #ECFDF5;
+  --color-success-light: #D1FAE5;
+  --color-success: #059669;        /* emerald-600 */
+  --color-success-dark: #047857;
+
+  /* ─── Semantic: Warning — 자동중단/큐 일시정지 등 주의 (amber) ─── */
+  --color-warning-bg: #FFFBEB;
+  --color-warning-light: #FEF3C7;
+  --color-warning: #D97706;        /* amber-600 */
+  --color-warning-dark: #B45309;
+
+  /* ─── Semantic: Danger — 반려/실패 (red-600 컨벤션) ─── */
+  --color-danger-bg: #FEF2F2;
+  --color-danger-light: #FEE2E2;
+  --color-danger: #DC2626;         /* red-600 */
+  --color-danger-dark: #B91C1C;
+
+  /* ─── Semantic: Info — 반영대기 (sky: cyan-leaning blue) ─── */
+  --color-info-bg: #F0F9FF;
+  --color-info-light: #BAE6FD;
+  --color-info: #0284C7;           /* sky-600 */
+  --color-info-dark: #0369A1;
+
+  /* ─── Semantic: Applied — 반영완료 보조 (success로 alias 권장) ─── */
+  --color-applied-bg: #ECFDF5;
+  --color-applied-light: #D1FAE5;
+  --color-applied: #059669;        /* = success */
+  --color-applied-dark: #047857;
+
+  /* ─── Code (SQL 구문 하이라이팅, 활성 탭, 링크) — Google Blue hero ─── */
+  --color-code: #1A73E8;           /* GCP blue */
+  --color-code-dark: #1557B0;
+  --color-code-bg: #E8F0FE;        /* GCP blue tint */
+
+  /* ─── Data Source (slate 뉴트럴과 조화) ─── */
+  --color-maxgauge-bg: #EEF2FF;    /* indigo-50 */
+  --color-maxgauge-text: #4338CA;  /* indigo-700 */
+  --color-awr-bg: #ECFEFF;         /* cyan-50 */
+  --color-awr-text: #0E7490;       /* cyan-700 */
+  --color-vsql-bg: #F1F5F9;        /* slate-100 */
+  --color-vsql-text: #475569;      /* slate-600 */
+
+  /* ─── Typography ─── */
+  --font-sans: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* ─── Type Scale (Perfect Fourth 1.333) ─── */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-md: 1.333rem;
+  --text-lg: 1.777rem;
+  --text-xl: 2.369rem;
+
+  /* ─── Leading ─── */
+  --leading-tight: 1.2;
+  --leading-table: 1.3;
+  --leading-normal: 1.5;
+  --leading-code: 1.6;
+
+  /* ─── Motion ─── */
+  --duration-fast: 100ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  /* 전체 UI 110% 확대 — Chrome 브라우저 줌 110%와 동일 효과
+     텍스트/간격/아이콘/SVG 모두 비례 확대됨. 한 줄 제거하면 원복. */
+  zoom: 1.1;
+}
+
+#root {
+  min-height: calc(100vh / 1.1);
+}
+
+/* Recharts: 메인 트렌드 차트에서만 tooltip 차단 (상세 차트에서는 tooltip 사용) */
+.no-recharts-tooltip .recharts-tooltip-wrapper,
+.no-recharts-tooltip .recharts-tooltip-cursor {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Cost sweep indicator — tuning progress */
+@keyframes cost-bar-1 {
+  0%, 100% { width: 60px; }
+  40% { width: 35px; }
+  70% { width: 48px; }
+}
+@keyframes cost-bar-2 {
+  0%, 100% { width: 40px; }
+  35% { width: 55px; }
+  65% { width: 30px; }
+}
+@keyframes cost-bar-3 {
+  0%, 100% { width: 50px; }
+  30% { width: 28px; }
+  60% { width: 42px; }
+}
+@keyframes sweep-y {
+  0% { top: 8%; opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { top: 88%; opacity: 0; }
+}
+@keyframes tuning-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.tuning-gauge-shimmer {
+  animation: tuning-shimmer 1.6s linear infinite;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%);
+}
+.cost-bar-1 { animation: cost-bar-1 3s ease-in-out infinite; }
+.cost-bar-2 { animation: cost-bar-2 3s ease-in-out infinite 0.4s; }
+.cost-bar-3 { animation: cost-bar-3 3s ease-in-out infinite 0.8s; }
+.cost-sweep-line {
+  animation: sweep-y 2s linear infinite;
+  background: linear-gradient(90deg, transparent 0%, var(--color-code) 30%, var(--color-code) 70%, transparent 100%);
+  box-shadow: 0 0 6px rgba(26,115,232,0.5);
+}
+
+/* Keyframes */
+@keyframes aiSweep {
+  0%   { left: 0%;   opacity: 0; }
+  10%  { left: 12%;  opacity: 1; }
+  90%  { left: 88%;  opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes toastDrop {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+/* Highlight: 새로 생성된 행 표시 */
+@keyframes highlightFade {
+  0% { background-color: var(--color-code-bg); box-shadow: inset 3px 0 0 0 var(--color-code); }
+  70% { background-color: var(--color-code-bg); box-shadow: inset 3px 0 0 0 var(--color-code); }
+  100% { background-color: transparent; box-shadow: none; }
+}
+.highlight-new-item {
+  animation: highlightFade 4s ease-out forwards;
+}
+
+/* AI Status Card: glow border animation + persistent left accent stripe */
+@keyframes aiGlow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
+  50% {
+    box-shadow: 0 0 12px 0 rgba(37, 99, 235, 0.06);
+  }
+}
+.animate-ai-glow {
+  animation: aiGlow 3s ease-in-out infinite;
+}
+
+/* ─── Scrollbar ─── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-muted);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+}
+
+/* ─── Workbench transition: 슬라이드패널 → 워크벤치 연속 전환 ─── */
+@keyframes wb-mini-enter {
+  from { transform: translateX(-100%); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+@keyframes wb-content-enter {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+.wb-mini-enter {
+  animation: wb-mini-enter 280ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.wb-content-enter {
+  animation: wb-content-enter 280ms cubic-bezier(0.4, 0, 0.2, 1) 60ms both;
+}
+/* 슬라이드패널 최대화 → 워크벤치: 크로스페이드 전환 */
+@keyframes wb-expand-from-panel {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.wb-expand-from-panel {
+  animation: wb-expand-from-panel 250ms ease-out both;
+}
+
+/* Navigation slide-over — keyframes로 React 렌더 타이밍 무관하게 동작 */
+@keyframes navSlideIn {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes navSlideOut {
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
+}
+[data-nav-animate="in"] {
+  animation: navSlideIn 300ms cubic-bezier(0.4, 0, 0.2, 1) both !important;
+  transform: translateX(0);
+}
+[data-nav-animate="out"] {
+  animation: navSlideOut 300ms cubic-bezier(0.4, 0, 0.2, 1) both !important;
+  transform: translateX(100%);
+}
+
+
+/* Object Info — 우측 고정 패널 */
+:root {
+  --object-info-w: 640px;
+  --object-info-collapsed-w: 36px;
+}
+body.object-info-open {
+  padding-right: var(--object-info-w);
+  transition: padding-right 200ms ease-out;
+}
+body.object-info-collapsed {
+  padding-right: var(--object-info-collapsed-w);
+  transition: padding-right 200ms ease-out;
+}
+body {
+  transition: padding-right 150ms ease-in;
+}
+/* 기존 우측 fixed 패널(SlidePanel 등)은 right 위치를 옮겨 겹침 방지.
+   SlidePanel 의 Tailwind translate-x 애니메이션과 충돌하지 않음. */
+body.object-info-open .fixed.inset-y-0.right-0 {
+  right: var(--object-info-w) !important;
+}
+body.object-info-collapsed .fixed.inset-y-0.right-0 {
+  right: var(--object-info-collapsed-w) !important;
+}
+.fixed.inset-y-0.right-0 {
+  transition: right 200ms ease-out;
+}

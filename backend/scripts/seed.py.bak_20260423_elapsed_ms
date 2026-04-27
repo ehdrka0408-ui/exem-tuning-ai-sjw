@@ -1,0 +1,366 @@
+"""Seed: 실습 스크립트 3건 + 기존 mock planChange 5건."""
+from __future__ import annotations
+
+from app.db.session import SessionLocal
+from app.models import TuningCase, Plan, BindVariable
+
+
+PRACTICE_CASES = [
+    dict(
+        title="스칼라 서브쿼리 → OUTER JOIN 변환",
+        category="scalar_subquery",
+        sql_id="0z4dm0y82gn7r",
+        schema_name="EXEM",
+        instance_name="EDU-DB",
+        status="approval_pending",
+        owner="ai",
+        source="manual",
+        sql_text="""SELECT /*+ FULL(o) */ ORDER_DATE ,
+       O.ORDER_ID,
+       O.PRODUCT_ID,
+       (SELECT /*+ FULL(c) */ C.CUSTOMER_NAME
+          FROM CUSTOMERS C
+         WHERE C.CUSTOMER_ID = O.CUSTOMER_ID)
+FROM   ORDERS O
+WHERE  ORDER_DATE > '20200101'""",
+        tuned_sql_text="""SELECT /*+ FULL(o) */ o.order_date,
+       o.order_id,
+       o.product_id,
+       c.customer_name
+FROM   orders o
+LEFT OUTER JOIN (
+        SELECT /*+ FULL(c) */ customer_name, customer_id
+        FROM customers c
+) c
+ON o.customer_id = c.customer_id
+WHERE  o.order_date > '20200101'""",
+        rationale="스칼라 서브쿼리는 행마다 CUSTOMERS를 재조회(946K Starts, 35M Buffers, 3분 22초)로 병목. OUTER JOIN으로 풀면 CUSTOMERS 1회 FULL 스캔 + HASH JOIN RIGHT OUTER로 650ms로 단축.",
+        plans=[
+            dict(phase="before", plan_hash="2376761950", elapsed_ms=202360, buffers=35000000,
+                 plan_text="""Plan hash value: 2376761950
+-----------------------------------------------------------------------------------------
+| Id  | Operation         | Name      | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+-----------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT  |           |      1 |        |    997K|00:00:00.97 |   44398 |
+|*  1 |  TABLE ACCESS FULL| CUSTOMERS |    946K|      1 |    946K|00:03:22.36 |      35M|
+|*  2 |  TABLE ACCESS FULL| ORDERS    |      1 |    842K|    997K|00:00:00.97 |   44398 |
+-----------------------------------------------------------------------------------------
+Predicate Information:
+   1 - filter("C"."CUSTOMER_ID"=:B1)
+   2 - filter("ORDER_DATE">'20200101')"""),
+            dict(phase="after", plan_hash="2105385677", elapsed_ms=650, buffers=44436,
+                 plan_text="""Plan hash value: 2105385677
+------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation             | Name      | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT      |           |      1 |        |    997K|00:00:00.65 |   44436 |       |       |          |
+|*  1 |  HASH JOIN RIGHT OUTER|           |      1 |    842K|    997K|00:00:00.65 |   44436 |  1757K|  1757K| 1707K (0)|
+|   2 |   TABLE ACCESS FULL   | CUSTOMERS |      1 |  10000 |  10000 |00:00:00.01 |      38 |       |       |          |
+|*  3 |   TABLE ACCESS FULL   | ORDERS    |      1 |    842K|    997K|00:00:00.23 |   44398 |       |       |          |
+------------------------------------------------------------------------------------------------------------------------
+Predicate Information:
+   1 - access("O"."CUSTOMER_ID"="CUSTOMER_ID")
+   3 - filter("O"."ORDER_DATE">'20200101')"""),
+        ],
+        binds=[dict(name=":B1", data_type="NUMBER", value="1~10000", position=1)],
+    ),
+    dict(
+        title="함수 호출 → 스칼라 서브쿼리 캐싱",
+        category="function_call",
+        sql_id="6vuk9jzjbgp74",
+        schema_name="EXEM",
+        instance_name="EDU-DB",
+        status="approval_pending",
+        owner="ai",
+        source="manual",
+        sql_text="""SELECT * FROM (
+   SELECT ORDER_DATE ,
+       GET_ORDER_DETAIL(O.ORDER_TYPE),
+       O.ORDER_ID,
+       O.PRODUCT_ID,
+       rownum
+   FROM ORDERS O
+   WHERE ORDER_DATE > '20200101'
+)
+WHERE rownum < 10000
+ORDER BY 2 DESC""",
+        tuned_sql_text="""SELECT * FROM (
+   SELECT ORDER_DATE ,
+       (SELECT GET_ORDER_DETAIL(O.ORDER_TYPE) FROM DUAL),
+       O.ORDER_ID,
+       O.PRODUCT_ID,
+       rownum
+   FROM ORDERS O
+   WHERE ORDER_DATE > '20200101'
+)
+WHERE rownum < 10000
+ORDER BY 2 DESC""",
+        rationale="GET_ORDER_DETAIL(0.1초 SLEEP 포함)을 행마다 호출하여 전체 수행 예상 시간 2시간 40분+. ORDER_TYPE은 3종뿐이므로 (SELECT f() FROM DUAL) 형태로 감싸면 Oracle 스칼라 서브쿼리 캐시가 3회만 실제 호출 → 3.16초로 단축.",
+        plans=[
+            dict(phase="before", plan_hash="2876963066", elapsed_ms=3003180, note="50분 수행 후 중단, 9999건 중 2933건만 진행",
+                 plan_text="""Plan hash value: 2876963066
+------------------------------------------------------------------------------------------
+| Id  | Operation             | Name   | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT      |        |      1 |        |      0 |00:00:00.01 |       0 |
+|   1 |  SORT ORDER BY        |        |      1 |   9999 |      0 |00:00:00.01 |       0 |
+|*  2 |   COUNT STOPKEY       |        |      1 |        |   2933 |00:50:03.18 |      17 |
+|   3 |    VIEW               |        |      1 |    842K|   2933 |00:50:03.17 |      17 |
+|   4 |     COUNT             |        |      1 |        |   2934 |00:00:00.02 |      17 |
+|*  5 |      TABLE ACCESS FULL| ORDERS |      1 |    842K|   2934 |00:00:00.01 |      17 |
+------------------------------------------------------------------------------------------
+Predicate Information:
+   2 - filter(ROWNUM<10000)
+   5 - filter("ORDER_DATE">'20200101')"""),
+            dict(phase="after", plan_hash="989011512", elapsed_ms=3160, buffers=49,
+                 plan_text="""Plan hash value: 989011512
+---------------------------------------------------------------------------------------------------------------------
+| Id  | Operation             | Name   | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+---------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT      |        |      1 |        |   9999 |00:00:03.16 |      49 |       |       |          |
+|   1 |  FAST DUAL            |        |      3 |      1 |      3 |00:00:00.01 |       0 |       |       |          |
+|   2 |  SORT ORDER BY        |        |      1 |   9999 |   9999 |00:00:03.16 |      49 |   877K|   519K|  779K (0)|
+|*  3 |   COUNT STOPKEY       |        |      1 |        |   9999 |00:00:03.14 |      49 |       |       |          |
+|   4 |    VIEW               |        |      1 |    842K|   9999 |00:00:03.13 |      49 |       |       |          |
+|   5 |     COUNT             |        |      1 |        |   9999 |00:00:00.02 |      49 |       |       |          |
+|*  6 |      TABLE ACCESS FULL| ORDERS |      1 |    842K|   9999 |00:00:00.01 |      49 |       |       |          |
+---------------------------------------------------------------------------------------------------------------------
+Predicate Information:
+   3 - filter(ROWNUM<10000)
+   6 - filter("ORDER_DATE">'20200101')"""),
+        ],
+        binds=[],
+    ),
+    dict(
+        title="OR 조건 → USE_CONCAT 인덱스 분리",
+        category="or_predicate",
+        sql_id=None,
+        schema_name="EXEM",
+        instance_name="EDU-DB",
+        status="approval_pending",
+        owner="ai",
+        source="manual",
+        sql_text="""SELECT customer_id, product_id
+FROM orders
+WHERE customer_id = 230
+   OR product_id = 231""",
+        tuned_sql_text="""SELECT /*+ USE_CONCAT(O) */ customer_id, product_id
+FROM orders O
+WHERE customer_id = 230
+   OR product_id = 231""",
+        rationale="OR 조건은 옵티마이저가 단일 인덱스를 고르기 어려워 ORDERS FULL(76,740 buffers)로 수행됨. USE_CONCAT 힌트로 UNION-ALL 분할 후 EXEM_ORDERS1/EXEM_ORDERS2 INDEX RANGE SCAN(899 buffers)로 처리 → 85배 IO 감소.",
+        plans=[
+            dict(phase="before", plan_hash="1275100350", elapsed_ms=820, buffers=76740,
+                 plan_text="""Plan hash value: 1275100350
+--------------------------------------------------------------------------------------
+| Id  | Operation         | Name   | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+--------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT  |        |      1 |        |  21000 |00:00:00.82 |   76740 |
+|*  1 |  TABLE ACCESS FULL| ORDERS |      1 |  16286 |  21000 |00:00:00.82 |   76740 |
+--------------------------------------------------------------------------------------"""),
+            dict(phase="after", plan_hash="354788250", elapsed_ms=120, buffers=899,
+                 plan_text="""Plan hash value: 354788250
+------------------------------------------------------------------------------------------------
+| Id  | Operation          | Name            | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |                 |      1 |        |  21000 |00:00:00.12 |     899 |
+|   1 |  VIEW              | VW_ORE_72AE2D8F |      1 |  17286 |  21000 |00:00:00.12 |     899 |
+|   2 |   UNION-ALL        |                 |      1 |        |  21000 |00:00:00.08 |     899 |
+|*  3 |    INDEX RANGE SCAN| EXEM_ORDERS1    |      1 |   1000 |   1000 |00:00:00.01 |      46 |
+|*  4 |    INDEX RANGE SCAN| EXEM_ORDERS2    |      1 |  16286 |  20000 |00:00:00.02 |     853 |
+------------------------------------------------------------------------------------------------"""),
+        ],
+        binds=[],
+    ),
+]
+
+
+MOCK_CASES = [
+    dict(
+        title="ORDERS-CUSTOMERS 조인 플랜 악화",
+        category="plan_regression",
+        sql_id="abc123def456",
+        schema_name="APP",
+        instance_name="PROD-DB1",
+        status="approval_pending",
+        owner="human",
+        source="maxgauge",
+        sql_text="""SELECT o.order_id, o.order_date, c.customer_name, o.total_amount
+FROM ORDERS o
+JOIN CUSTOMERS c ON o.customer_id = c.customer_id
+WHERE o.order_date BETWEEN :start_dt AND :end_dt
+ORDER BY o.order_date DESC""",
+        rationale="플랜 해시 38291742 → 19283746 전환 이후 420ms → 3240ms(671%) 악화. 통계 재수집 또는 SPM 고정 후보.",
+        plans=[
+            dict(phase="before", plan_hash="38291742", elapsed_ms=420,
+                 plan_text="""Plan hash value: 38291742
+------------------------------------------------------------------
+| Id | Operation                     | Name         | Rows | Cost |
+------------------------------------------------------------------
+|  0 | SELECT STATEMENT              |              |  500 |  125 |
+|  1 |  SORT ORDER BY                |              |  500 |  125 |
+|  2 |   NESTED LOOPS                |              |  500 |   98 |
+|  3 |    INDEX RANGE SCAN           | IDX_ORD_DATE |  500 |   12 |
+|  4 |    TABLE ACCESS BY INDEX ROWID| CUSTOMERS    |    1 |    1 |
+------------------------------------------------------------------"""),
+            dict(phase="after", plan_hash="19283746", elapsed_ms=3240,
+                 plan_text="""Plan hash value: 19283746
+------------------------------------------------------------------
+| Id | Operation           | Name      | Rows  | Cost |
+------------------------------------------------------------------
+|  0 | SELECT STATEMENT    |           |  500  | 8912 |
+|  1 |  SORT ORDER BY      |           |  500  | 8912 |
+|  2 |   HASH JOIN         |           |  500  | 8901 |
+|  3 |    TABLE ACCESS FULL| CUSTOMERS | 100K  |  412 |
+|  4 |    TABLE ACCESS FULL| ORDERS    | 2M    | 8478 |
+------------------------------------------------------------------"""),
+        ],
+        binds=[
+            dict(name=":start_dt", data_type="DATE", value="2026-04-01", position=1),
+            dict(name=":end_dt",   data_type="DATE", value="2026-04-03", position=2),
+        ],
+    ),
+    dict(
+        title="EMPLOYEES 급여/입사일 필터",
+        category="plan_regression",
+        sql_id="def456ghi789",
+        schema_name="HR",
+        instance_name="PROD-DB2",
+        status="approval_pending",
+        owner="human",
+        source="awr",
+        sql_text="""SELECT e.employee_id, e.first_name, e.last_name, d.department_name
+FROM EMPLOYEES e
+JOIN DEPARTMENTS d ON e.department_id = d.department_id
+WHERE e.salary > :min_salary
+AND e.hire_date > :cutoff_date""",
+        rationale="BIND 편향으로 플랜이 NL→HASH로 전환. 적응적 플랜/SQL Profile 검토 필요.",
+        plans=[
+            dict(phase="before", plan_hash="AA000001", elapsed_ms=150,
+                 plan_text="""Plan hash value: AA000001
+------------------------------------------
+| Id | Operation | Rows | Cost |
+------------------------------------------
+| 0  | SELECT    |   50 |   18 |
+| 1  | NESTED LOOP |  50 |   18 |
+------------------------------------------"""),
+            dict(phase="after", plan_hash="AA000002", elapsed_ms=890,
+                 plan_text="""Plan hash value: AA000002
+------------------------------------------
+| Id | Operation | Rows | Cost |
+------------------------------------------
+| 0  | SELECT    |  50K |  512 |
+| 1  | HASH JOIN | 50K  |  512 |
+------------------------------------------"""),
+        ],
+        binds=[
+            dict(name=":min_salary",  data_type="NUMBER", value="5000",       position=1),
+            dict(name=":cutoff_date", data_type="DATE",   value="2024-01-01", position=2),
+        ],
+    ),
+    dict(
+        title="ACCOUNTS 잔액 합산",
+        category="plan_regression",
+        sql_id="ghi789jkl012",
+        schema_name="FIN",
+        instance_name="PROD-DB1",
+        status="apply_pending",
+        owner="human",
+        source="vsql",
+        sql_text="""SELECT a.account_no, a.balance, SUM(t.amount) total_txn
+FROM ACCOUNTS a
+LEFT JOIN TRANSACTIONS t ON a.account_id = t.account_id
+WHERE a.status = :status
+GROUP BY a.account_no, a.balance""",
+        rationale="GROUP BY HASH 플랜으로 전환 후 버퍼 사용량 급증. 인덱스 힌트 또는 파티션 프루닝 후보.",
+        plans=[
+            dict(phase="before", plan_hash="BB000001", elapsed_ms=310,
+                 plan_text="Plan hash value: BB000001\nNESTED LOOPS + SORT GROUP BY"),
+            dict(phase="after", plan_hash="BB000002", elapsed_ms=1820,
+                 plan_text="Plan hash value: BB000002\nHASH JOIN + HASH GROUP BY"),
+        ],
+        binds=[dict(name=":status", data_type="VARCHAR2", value="ACTIVE", position=1)],
+    ),
+    dict(
+        title="PRODUCTS 일별 판매 집계",
+        category="plan_regression",
+        sql_id="jkl012mno345",
+        schema_name="SALES",
+        instance_name="PROD-DB3",
+        status="approval_pending",
+        owner="ai",
+        source="awr",
+        sql_text="""SELECT p.product_id, p.product_name, SUM(oi.quantity) total_qty
+FROM PRODUCTS p
+JOIN ORDER_ITEMS oi ON p.product_id = oi.product_id
+JOIN ORDERS o ON oi.order_id = o.order_id
+WHERE o.order_date >= TRUNC(SYSDATE) - 30
+GROUP BY p.product_id, p.product_name
+ORDER BY total_qty DESC""",
+        rationale="PRODUCTS-ORDER_ITEMS-ORDERS 3테이블 조인에서 조인 순서 변경으로 30일치 스캔 비용 증가.",
+        plans=[
+            dict(phase="before", plan_hash="CC000001", elapsed_ms=480,
+                 plan_text="Plan hash value: CC000001\nHASH JOIN optimal order"),
+            dict(phase="after", plan_hash="CC000002", elapsed_ms=2760,
+                 plan_text="Plan hash value: CC000002\nHASH JOIN swapped driving table"),
+        ],
+        binds=[],
+    ),
+    dict(
+        title="EMPLOYEES 매니저 self-join",
+        category="plan_regression",
+        sql_id="mno345pqr678",
+        schema_name="HR",
+        instance_name="PROD-DB2",
+        status="applied",
+        owner="done",
+        source="manual",
+        sql_text="""SELECT e.employee_id, e.first_name, m.first_name manager_name, d.department_name
+FROM EMPLOYEES e
+LEFT JOIN EMPLOYEES m ON e.manager_id = m.employee_id
+JOIN DEPARTMENTS d ON e.department_id = d.department_id
+WHERE d.location_id = :loc_id""",
+        rationale="self-join에서 OUTER 순서 변경 필요. SPM으로 기존 플랜 고정 완료.",
+        plans=[
+            dict(phase="before", plan_hash="DD000001", elapsed_ms=560,
+                 plan_text="Plan hash value: DD000001\nBAD self-join order"),
+            dict(phase="after", plan_hash="DD000002", elapsed_ms=180,
+                 plan_text="Plan hash value: DD000002\nGOOD self-join order via SPM"),
+        ],
+        binds=[dict(name=":loc_id", data_type="NUMBER", value="1700", position=1)],
+    ),
+]
+
+
+def seed():
+    db = SessionLocal()
+    try:
+        # 멱등: 기존 전부 삭제 후 재삽입
+        db.query(BindVariable).delete()
+        db.query(Plan).delete()
+        db.query(TuningCase).delete()
+        db.commit()
+
+        all_cases = PRACTICE_CASES + MOCK_CASES
+        for c in all_cases:
+            plans = c.pop("plans", [])
+            binds = c.pop("binds", [])
+            case = TuningCase(**c)
+            db.add(case)
+            db.flush()
+            for p in plans:
+                db.add(Plan(case_id=case.id, **p))
+            for i, b in enumerate(binds, start=1):
+                b.setdefault("position", i)
+                db.add(BindVariable(case_id=case.id, **b))
+        db.commit()
+        n_cases = db.query(TuningCase).count()
+        n_plans = db.query(Plan).count()
+        n_binds = db.query(BindVariable).count()
+        print(f"seeded: cases={n_cases}, plans={n_plans}, binds={n_binds}")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    seed()

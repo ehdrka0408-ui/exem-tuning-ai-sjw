@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>튜닝 중 행 시각화 — exem_tuning_ai</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable.css" rel="stylesheet">
+<style>
+  :root {
+    --bg: #FAFAFA;
+    --bg-alt: #F5F5F5;
+    --bg-muted: #E5E5E5;
+    --border: #D4D4D4;
+    --text-primary: #171717;
+    --text-secondary: #737373;
+    --text-muted: #A3A3A3;
+    --warning: #F59E0B;
+    --warning-bg: #FFFBEB;
+    --info: #06B6D4;
+    --info-bg: #ECFEFF;
+    --success: #22C55E;
+    --success-bg: #F0FDF4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    padding: 48px 32px;
+    font-size: 13px;
+    line-height: 1.5;
+    font-feature-settings: "ss01", "tnum";
+  }
+  h1 { font-size: 21px; font-weight: 600; margin-bottom: 6px; letter-spacing: -0.02em; }
+  h2 { font-size: 13px; font-weight: 400; color: var(--text-secondary); margin-bottom: 32px; }
+  .section { margin-bottom: 48px; max-width: 1200px; }
+  .section-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+    font-weight: 500;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 11px 14px;
+    text-align: left;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    background: white;
+  }
+  th {
+    background: var(--bg-alt);
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.01em;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+
+  .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; font-size: 11px; color: var(--text-muted); }
+  .num { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; font-variant-numeric: tabular-nums; font-size: 12px; }
+  .right { text-align: right; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 9px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .badge-dot { width: 6px; height: 6px; border-radius: 9999px; }
+  .badge-done { background: var(--warning-bg); color: #B45309; }
+  .badge-done .badge-dot { background: var(--warning); }
+  .badge-apply { background: var(--info-bg); color: #0E7490; }
+  .badge-apply .badge-dot { background: var(--info); }
+  .badge-applied { background: var(--success-bg); color: #15803D; }
+  .badge-applied .badge-dot { background: var(--success); }
+  .badge-tuning {
+    color: #B45309;
+    font-weight: 600;
+    padding-left: 0;
+    background: transparent;
+  }
+  .badge-tuning .num-pct {
+    color: #B45309;
+    font-weight: 600;
+    margin-left: 2px;
+  }
+
+  .improvement {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: var(--success-bg);
+    color: #15803D;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .type-tag {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: var(--bg-alt);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 500;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .dash { color: var(--text-muted); font-size: 11px; }
+
+  /* ─── 튜닝 중 행 — 3겹 레이어 ─── */
+  tr.tuning-row {
+    position: relative;
+  }
+
+  /* 레이어 1: 행 틴트 (td 배경) */
+  tr.tuning-row > td {
+    background: rgba(245, 158, 11, 0.055);
+  }
+
+  /* 레이어 2: 앰비언트 스윕 — tr::before 좌→우 */
+  tr.tuning-row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 2px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(245, 158, 11, 0.10) 40%,
+      rgba(245, 158, 11, 0.17) 50%,
+      rgba(245, 158, 11, 0.10) 60%,
+      transparent 100%
+    );
+    background-size: 40% 100%;
+    background-repeat: no-repeat;
+    background-position: -50% center;
+    animation: sweep 3.5s linear infinite;
+    pointer-events: none;
+    z-index: 0;
+  }
+  @keyframes sweep {
+    0%   { background-position: -50% center; }
+    100% { background-position: 150% center; }
+  }
+
+  /* 레이어 3: 하단 프로그레스 스트립 — tr::after 2px */
+  tr.tuning-row::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    width: var(--pct, 0%);
+    background: var(--warning);
+    transition: width 2.5s linear;
+    pointer-events: none;
+    z-index: 2;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.35);
+  }
+
+  /* td 내용은 레이어 위로 */
+  tr.tuning-row > td > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    tr.tuning-row::before { animation: none; }
+    tr.tuning-row::after { transition: none; }
+  }
+
+  .anatomy {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 20px 24px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    max-width: 900px;
+  }
+  .anatomy dt { font-weight: 600; color: var(--text-primary); }
+  .anatomy code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #B45309; background: var(--warning-bg); padding: 1px 6px; border-radius: 3px; }
+
+  .swatch-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 16px;
+    max-width: 1200px;
+  }
+  .swatch-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 12px;
+  }
+  .swatch-card .label { color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .swatch-card .value { color: var(--text-primary); font-weight: 600; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .mini-strip {
+    height: 3px;
+    background: var(--bg-muted);
+    border-radius: 9999px;
+    margin-top: 10px;
+    overflow: hidden;
+  }
+  .mini-strip > div {
+    height: 100%;
+    background: var(--warning);
+    border-radius: 9999px;
+    transition: width 2.5s linear;
+  }
+</style>
+</head>
+<body>
+  <h1>튜닝 중 행 시각화</h1>
+  <h2>EXEM · Precise · Assured · Swift — 행 배경 + 앰비언트 스윕 + 하단 프로그레스 스트립</h2>
+
+  <div class="section">
+    <div class="section-label">작업함 목록뷰 — 혼재 상태</div>
+    <table>
+      <colgroup>
+        <col style="width: 38px">
+        <col style="width: 180px">
+        <col style="width: 160px">
+        <col>
+        <col style="width: 80px">
+        <col style="width: 80px">
+        <col style="width: 70px">
+        <col style="width: 100px">
+      </colgroup>
+      <thead>
+        <tr>
+          <th></th>
+          <th>상태</th>
+          <th>SQL ID</th>
+          <th>작업명</th>
+          <th class="right">Before</th>
+          <th class="right">After</th>
+          <th class="right">개선</th>
+          <th>추천</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>☐</td>
+          <td><span class="badge badge-done"><span class="badge-dot"></span>튜닝완료</span></td>
+          <td class="mono">a1b2c3d4e5f6g</td>
+          <td>ORDER_HIST 조인 최적화</td>
+          <td class="num right" style="color: var(--text-secondary)">48.2s</td>
+          <td class="num right" style="font-weight: 500">12.1s</td>
+          <td class="right"><span class="improvement">↓75%</span></td>
+          <td><span class="type-tag">rewrite</span></td>
+        </tr>
+
+        <tr class="tuning-row" style="--pct: 15%">
+          <td>☐</td>
+          <td><span class="badge badge-tuning">튜닝중<span class="num-pct"> · ~15%</span></span></td>
+          <td class="mono">b2c3d4e5f6g7h</td>
+          <td>SALES_RPT 집계 최적화</td>
+          <td class="num right" style="color: var(--text-secondary)">23.4s</td>
+          <td class="num right"><span class="dash">—</span></td>
+          <td class="right"><span class="dash">—</span></td>
+          <td><span class="dash">—</span></td>
+        </tr>
+
+        <tr class="tuning-row" style="--pct: 45%">
+          <td>☐</td>
+          <td><span class="badge badge-tuning">튜닝중<span class="num-pct"> · ~45%</span></span></td>
+          <td class="mono">z9y8x7w6v5u4t</td>
+          <td>EMP-DEPT 조회 최적화</td>
+          <td class="num right" style="color: var(--text-secondary)">12.5s</td>
+          <td class="num right"><span class="dash">—</span></td>
+          <td class="right"><span class="dash">—</span></td>
+          <td><span class="dash">—</span></td>
+        </tr>
+
+        <tr class="tuning-row" style="--pct: 87%">
+          <td>☐</td>
+          <td><span class="badge badge-tuning">튜닝중<span class="num-pct"> · ~87%</span></span></td>
+          <td class="mono">c3d4e5f6g7h8i</td>
+          <td>INV_BATCH 재고 스냅샷</td>
+          <td class="num right" style="color: var(--text-secondary)">95.1s</td>
+          <td class="num right"><span class="dash">—</span></td>
+          <td class="right"><span class="dash">—</span></td>
+          <td><span class="dash">—</span></td>
+        </tr>
+
+        <tr>
+          <td>☐</td>
+          <td><span class="badge badge-apply"><span class="badge-dot"></span>반영대기</span></td>
+          <td class="mono">m3n4o5p6q7r8s</td>
+          <td>ACCT 월마감 배치</td>
+          <td class="num right" style="color: var(--text-secondary)">8.1s</td>
+          <td class="num right" style="font-weight: 500">2.7s</td>
+          <td class="right"><span class="improvement">↓67%</span></td>
+          <td><span class="type-tag">index</span></td>
+        </tr>
+
+        <tr>
+          <td>☐</td>
+          <td><span class="badge badge-applied"><span class="badge-dot"></span>반영완료</span></td>
+          <td class="mono">k1l2m3n4o5p6q</td>
+          <td>FIN_SETTLE 정산 쿼리</td>
+          <td class="num right" style="color: var(--text-secondary)">15.2s</td>
+          <td class="num right" style="font-weight: 500">4.1s</td>
+          <td class="right"><span class="improvement">↓73%</span></td>
+          <td><span class="type-tag">hint</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-label">3겹 레이어 해부</div>
+    <dl class="anatomy">
+      <dt>1. 행 틴트</dt>
+      <dd>전체 행 배경 <code>rgba(245, 158, 11, 0.055)</code>. 정적 상태 신호 — "이 행은 AI가 작업 중".</dd>
+      <dt>2. 앰비언트 스윕</dt>
+      <dd>3.5초 주기 좌→우 그라데이션. amber alpha 0.10~0.17 구간. "지금 살아있음" 생동감 신호.</dd>
+      <dt>3. 하단 프로그레스</dt>
+      <dd>행 하단 2px amber-500 스트립. 너비 = 진행률 %. 약한 shadow로 emitting 느낌. 정량 신호.</dd>
+      <dt>텍스트</dt>
+      <dd>상태 셀에 <code>튜닝중 · ~45%</code>. tilde prefix로 "부정확함"을 솔직하게 표기.</dd>
+    </dl>
+  </div>
+
+  <div class="section">
+    <div class="section-label">진행률 연출 — 15% · 45% · 87% 동시 비교</div>
+    <div class="swatch-grid">
+      <div class="swatch-card">
+        <div class="label">초반</div>
+        <div class="value">~15%</div>
+        <div class="mini-strip"><div style="width: 15%"></div></div>
+      </div>
+      <div class="swatch-card">
+        <div class="label">중반</div>
+        <div class="value">~45%</div>
+        <div class="mini-strip"><div style="width: 45%"></div></div>
+      </div>
+      <div class="swatch-card">
+        <div class="label">후반</div>
+        <div class="value">~87%</div>
+        <div class="mini-strip"><div style="width: 87%"></div></div>
+      </div>
+      <div class="swatch-card" style="border-style: dashed">
+        <div class="label">절대 100% 안 찍음</div>
+        <div class="value" style="color: var(--text-muted)">max ~95%</div>
+        <div class="mini-strip"><div style="width: 95%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">비교: 프로그레스 없이 틴트 + 스윕만 (참고용)</div>
+    <table>
+      <colgroup>
+        <col style="width: 38px">
+        <col style="width: 180px">
+        <col style="width: 160px">
+        <col>
+      </colgroup>
+      <thead>
+        <tr>
+          <th></th>
+          <th>상태</th>
+          <th>SQL ID</th>
+          <th>작업명</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="tuning-row">
+          <td>☐</td>
+          <td><span class="badge badge-tuning">튜닝중</span></td>
+          <td class="mono">z9y8x7w6v5u4t</td>
+          <td>EMP-DEPT 조회 최적화 (프로그레스 없음)</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size: 11px; color: var(--text-muted); margin-top: 10px;">
+      — % 없이는 "진행 중인 건 알겠는데 얼마나 남았는지 모름". 기다림 피로도 증가.
+    </p>
+  </div>
+
+</body>
+</html>

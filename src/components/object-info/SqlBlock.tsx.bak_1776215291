@@ -1,0 +1,48 @@
+import { useEffect, useRef, type ReactNode } from 'react'
+import { useObjectInfo } from './ObjectInfoContext'
+
+interface Props {
+  sql: string
+  children?: ReactNode
+  className?: string
+}
+
+/**
+ * SQL 블록을 감싸는 wrapper.
+ * - 내부에서 텍스트를 선택하면 현재 활성 SQL로 등록됨
+ * - 이후 F5를 누르면 Object Info 패널이 열림
+ * - children 미지정 시 SQL을 pre 태그로 렌더
+ */
+export default function SqlBlock({ sql, children, className }: Props) {
+  const ref = useRef<HTMLDivElement>(null)
+  const { setActiveSql } = useObjectInfo()
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const onUp = () => {
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0) return
+      const anchor = sel.anchorNode
+      if (!anchor || !el.contains(anchor)) return
+      setActiveSql(sql)
+    }
+    const onEnter = () => setActiveSql(sql)
+    el.addEventListener('mouseup', onUp)
+    el.addEventListener('mouseenter', onEnter)
+    return () => {
+      el.removeEventListener('mouseup', onUp)
+      el.removeEventListener('mouseenter', onEnter)
+    }
+  }, [sql, setActiveSql])
+
+  return (
+    <div ref={ref} className={className} data-object-info-sql="1" title="드래그 + F5 = Object Info">
+      {children ?? (
+        <pre className="text-xs bg-slate-50 p-3 rounded overflow-x-auto font-mono whitespace-pre">
+{sql}
+        </pre>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,166 @@
+import {
+  createContext, useContext, useState, useCallback, useEffect, useRef,
+  type ReactNode,
+} from 'react'
+import { buildAliasMap, resolveTerm } from '../../lib/object-info/aliasResolver'
+import type { AliasMap } from '../../lib/object-info'
+
+interface OpenPayload {
+  sql: string
+  term: string
+}
+
+interface ObjectInfoCtx {
+  isOpen: boolean
+  collapsed: boolean
+  sql: string
+  term: string
+  aliasMap: AliasMap
+  resolved: string | null
+  colTerm: string
+  setColTerm: (t: string) => void
+  showToBe: boolean
+  setShowToBe: (b: boolean) => void
+  open: (p: OpenPayload) => void
+  close: () => void
+  toggleCollapsed: () => void
+  setActiveSql: (sql: string | null, el?: HTMLElement | null) => void
+}
+
+const Ctx = createContext<ObjectInfoCtx | null>(null)
+
+export function useObjectInfo() {
+  const v = useContext(Ctx)
+  if (!v) throw new Error('ObjectInfoProvider missing')
+  return v
+}
+
+export function ObjectInfoProvider({ children }: { children: ReactNode }) {
+  const [isOpen, setOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
+  const [sql, setSql] = useState('')
+  const [term, setTerm] = useState('')
+  const [aliasMap, setAliasMap] = useState<AliasMap>({})
+  const [resolved, setResolved] = useState<string | null>(null)
+  const [colTerm, setColTerm] = useState<string>('')
+  const [showToBe, setShowToBe] = useState<boolean>(true)
+  const activeSqlRef = useRef<string | null>(null)
+
+  const open = useCallback(({ sql, term }: OpenPayload) => {
+    const am = buildAliasMap(sql)
+    const r = resolveTerm(term, am)
+    setSql(sql)
+    setTerm(term)
+    setAliasMap(am)
+    setResolved(r)
+    setColTerm('')
+    setCollapsed(false)
+    setOpen(true)
+  }, [])
+
+  const close = useCallback(() => setOpen(false), [])
+  const toggleCollapsed = useCallback(() => setCollapsed(c => !c), [])
+
+  // 전역 마우스업: 모든 SQL 영역(pre 또는 [data-sql-source]) 에서 텍스트 드래그 → colTerm 세팅
+  useEffect(() => {
+    function onUp(e: MouseEvent) {
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0) return
+      const picked = sel.toString().trim()
+      if (!picked) return
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked)) return
+      // 선택이 SQL 영역(pre 또는 data-sql-source) 안에 있어야 함
+      const target = e.target as Element | null
+      if (!target) return
+      const inside = target.closest('pre') || target.closest('[data-sql-source]')
+      if (!inside) return
+      setColTerm(picked)
+    }
+    window.addEventListener('mouseup', onUp)
+    return () => window.removeEventListener('mouseup', onUp)
+  }, [])
+
+  // 전역 단축키: F5 = 열기, Esc = 닫기
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && isOpen) { close(); return }
+      if (e.key !== 'F5') return
+
+      // F5 는 브라우저 새로고침이 기본 동작이므로 항상 차단
+      // (앱 안에서 F5 = Object Info 열기 단축키)
+      e.preventDefault()
+
+      // (1) textarea 안에서 선택된 경우
+      const active = document.activeElement
+      if (active instanceof HTMLTextAreaElement) {
+        const s = active.selectionStart ?? 0
+        const eIdx = active.selectionEnd ?? 0
+        const picked = active.value.substring(s, eIdx).trim()
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked)) {
+          const sqlBox = active.closest('[data-sql-source]') as HTMLElement | null
+          const sqlText = sqlBox?.dataset.sqlSource || active.value
+          open({ sql: sqlText, term: picked })
+        } else {
+          tryOpenWithCurrentColTerm()
+        }
+        return
+      }
+
+      // (2) DOM range 선택
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0) { tryOpenWithCurrentColTerm(); return }
+      const picked = sel.toString().trim()
+      if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(picked)) { tryOpenWithCurrentColTerm(); return }
+
+      let activeSql: string | null = activeSqlRef.current
+      const anchor = sel.anchorNode
+      const selEl = anchor instanceof Element ? anchor : anchor?.parentElement ?? null
+      if (!activeSql && selEl) {
+        const srcEl = selEl.closest('[data-sql-source]') as HTMLElement | null
+        if (srcEl && srcEl.dataset.sqlSource) activeSql = srcEl.dataset.sqlSource
+        else {
+          const pre = selEl.closest('pre')
+          if (pre) activeSql = pre.textContent ?? null
+        }
+      }
+      if (!activeSql) return
+      open({ sql: activeSql, term: picked })
+    }
+
+    function tryOpenWithCurrentColTerm() {
+      if (!colTerm) return
+      // activeSqlRef 우선, 없으면 화면에서 첫 SQL pre/data-sql-source 찾기
+      let sqlText: string | null = activeSqlRef.current
+      if (!sqlText) {
+        const el = document.querySelector('[data-sql-source]') as HTMLElement | null
+        sqlText = el?.dataset.sqlSource || document.querySelector('pre')?.textContent || null
+      }
+      if (sqlText) open({ sql: sqlText, term: colTerm })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isOpen, open, close, colTerm])
+
+  // 본문을 오른쪽 공간만큼 밀어서 겹침 방지
+  useEffect(() => {
+    const cls = isOpen && !collapsed ? 'object-info-open' : isOpen && collapsed ? 'object-info-collapsed' : ''
+    document.body.classList.remove('object-info-open', 'object-info-collapsed')
+    if (cls) document.body.classList.add(cls)
+    return () => {
+      document.body.classList.remove('object-info-open', 'object-info-collapsed')
+    }
+  }, [isOpen, collapsed])
+
+  const setActiveSql = useCallback((sql: string | null, _el?: HTMLElement | null) => {
+    activeSqlRef.current = sql
+  }, [])
+
+  return (
+    <Ctx.Provider value={{
+      isOpen, collapsed, sql, term, aliasMap, resolved, colTerm, setColTerm, showToBe, setShowToBe,
+      open, close, toggleCollapsed, setActiveSql,
+    }}>
+      {children}
+    </Ctx.Provider>
+  )
+}

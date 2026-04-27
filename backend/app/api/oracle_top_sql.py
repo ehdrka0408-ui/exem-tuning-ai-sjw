@@ -1,0 +1,568 @@
+"""Oracle V$SQL / AWR Top SQL 실시간 조회 API"""
+import logging
+from fastapi import APIRouter, Query
+import oracledb
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api", tags=["oracle"])
+
+
+def _sort_expr(sort_key: str, value_mode: str, prefix: str = "") -> str:
+    col_map = {
+        "elapsed": "elapsed_time", "cpuTime": "cpu_time",
+        "logicalReads": "buffer_gets", "physicalReads": "disk_reads",
+        "executions": "executions",
+    }
+    col = col_map.get(sort_key, "elapsed_time")
+    p = f"{prefix}." if prefix else ""
+    if value_mode == "avg" and sort_key != "executions":
+        return f"{p}{col} / NULLIF({p}executions, 0)"
+    return f"{p}{col}"
+
+
+def _sort_expr_sum(sort_key: str, value_mode: str, col_prefix: str = "ss") -> str:
+    col_map = {
+        "elapsed": "elapsed_time_delta", "cpuTime": "cpu_time_delta",
+        "logicalReads": "buffer_gets_delta", "physicalReads": "disk_reads_delta",
+        "executions": "executions_delta",
+    }
+    col = col_map.get(sort_key, "elapsed_time_delta")
+    if value_mode == "avg" and sort_key != "executions":
+        return f"SUM({col_prefix}.{col}) / NULLIF(SUM({col_prefix}.executions_delta), 0)"
+    return f"SUM({col_prefix}.{col})"
+
+# ── Oracle 인스턴스 설정 (instances 테이블 연동) ──
+def _get_oracle_instances():
+    """PostgreSQL instances에서 활성 Oracle 인스턴스 목록 조회"""
+    from app.db.session import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        rows = db.execute(text(
+            "SELECT instance_id, name, host, port, sid, username AS db_user, "
+            "password_encrypted AS db_password, "
+            "NULL AS schema_name, alias_name AS alias, NULL AS instance_type "
+            "FROM instances WHERE db_type = 'oracle' AND is_active = true"
+        )).fetchall()
+        result = []
+        for r in rows:
+            d = dict(zip(['id','name','host','port','sid','db_user','db_password',
+                          'schema_name','alias','instance_type'], r))
+            d['instance_id'] = d['id']  # integer PK alias
+            result.append(d)
+        return result
+    finally:
+        db.close()
+
+
+def _query_vsql(host, port, sid, user, password, schema, top_n, inst_name, sort_key="elapsed", value_mode="total"):
+    from app.clients.oracle import open_oracle
+    conn = open_oracle(host, port, sid, user, password)
+    cur = conn.cursor()
+    order_col = _sort_expr(sort_key, value_mode)
+    cur.execute(f"""
+        SELECT sql_id,
+               SUBSTR(sql_text, 1, 500) AS sql_text,
+               cpu_time, elapsed_time, buffer_gets,
+               disk_reads, executions, inst_id,
+               module, parsing_schema_name,
+               plan_hash_value
+        FROM gv$sqlarea
+        WHERE executions > 0
+          AND (:schema IS NULL OR parsing_schema_name = :schema)
+          AND sql_text NOT LIKE '%gv$%'
+          AND sql_text NOT LIKE '%v$%'
+          AND sql_text NOT LIKE 'BEGIN%'
+          AND sql_text NOT LIKE 'DECLARE%'
+          AND parsing_schema_name NOT IN ('SYS','SYSTEM','DBSNMP','ORACLE_OCM','MDSYS','XDB','WMSYS','CTXSYS','ORDDATA')
+        ORDER BY {order_col} DESC
+        FETCH FIRST :n ROWS ONLY
+    """, {"schema": schema.upper() if schema else None, "n": top_n})
+    results = []
+    for r in cur.fetchall():
+        results.append({
+            "sqlId": r[0],
+            "sqlText": r[1],
+            "elapsed": round(r[3] / 1000000, 2),
+            "cpuTime": round(r[2] / 1000000, 2),
+            "logicalReads": int(r[4]),
+            "physicalReads": int(r[5]),
+            "executions": int(r[6]),
+            "source": "v$sql",
+            "module": r[8] or "",
+            "instanceName": inst_name,
+            "schemaName": r[9] or "",
+            "planHashValue": str(r[10]) if r[10] else "",
+        })
+    cur.close()
+    conn.close()
+    return results
+
+
+def _query_awr(host, port, sid, user, password, schema, top_n, inst_name, begin_time=None, end_time=None, sort_key="elapsed", value_mode="total"):
+    from app.clients.oracle import open_oracle
+    conn = open_oracle(host, port, sid, user, password)
+    cur = conn.cursor()
+
+    # 시간 범위 → snap_id 범위 사전 조회
+    if begin_time and end_time:
+        cur.execute("""
+            SELECT MIN(snap_id), MAX(snap_id)
+            FROM dba_hist_snapshot
+            WHERE end_interval_time BETWEEN
+                  TO_TIMESTAMP(:bt, 'YYYY-MM-DD HH24:MI:SS')
+              AND TO_TIMESTAMP(:et, 'YYYY-MM-DD HH24:MI:SS')
+        """, {"bt": begin_time, "et": end_time})
+        row = cur.fetchone()
+        snap_begin = row[0] if row and row[0] else None
+        snap_end = row[1] if row and row[1] else None
+    else:
+        snap_begin = None
+        snap_end = None
+
+    # snap 범위 없으면 최근 10개 스냅 기본값
+    if not snap_begin or not snap_end:
+        cur.execute("SELECT MAX(snap_id) - 10, MAX(snap_id) FROM dba_hist_snapshot")
+        row = cur.fetchone()
+        snap_begin, snap_end = row[0], row[1]
+
+    sort_inner = _sort_expr_sum(sort_key, value_mode)
+    sort_outer = _sort_expr(sort_key, value_mode, "agg")
+    awr_sql = """
+        SELECT agg.sql_id,
+               DBMS_LOB.SUBSTR(st.sql_text, 500, 1) AS sql_text,
+               agg.cpu_time, agg.elapsed_time, agg.buffer_gets,
+               agg.disk_reads, agg.executions, agg.instance_number,
+               agg.module, agg.parsing_schema_name,
+               agg.plan_hash_value
+        FROM (
+            SELECT ss.sql_id,
+                   SUM(ss.cpu_time_delta) AS cpu_time,
+                   SUM(ss.elapsed_time_delta) AS elapsed_time,
+                   SUM(ss.buffer_gets_delta) AS buffer_gets,
+                   SUM(ss.disk_reads_delta) AS disk_reads,
+                   SUM(ss.executions_delta) AS executions,
+                   ss.instance_number,
+                   MAX(ss.module) AS module,
+                   ss.parsing_schema_name,
+                   MAX(ss.plan_hash_value) KEEP (DENSE_RANK LAST ORDER BY ss.snap_id) AS plan_hash_value
+            FROM dba_hist_sqlstat ss
+            WHERE ss.executions_delta > 0
+              AND (:schema IS NULL OR ss.parsing_schema_name = :schema)
+              AND ss.parsing_schema_name NOT IN ('SYS','SYSTEM','DBSNMP','ORACLE_OCM','MDSYS','XDB','WMSYS','CTXSYS','ORDDATA')
+              AND ss.snap_id BETWEEN :snap_begin AND :snap_end
+            GROUP BY ss.sql_id, ss.instance_number, ss.parsing_schema_name
+            ORDER BY """ + sort_inner + """ DESC
+            FETCH FIRST :inner_n ROWS ONLY
+        ) agg
+        JOIN dba_hist_sqltext st ON agg.sql_id = st.sql_id
+        WHERE DBMS_LOB.SUBSTR(st.sql_text, 6, 1) NOT IN ('BEGIN ', 'DECLAR')
+        ORDER BY """ + sort_outer + """ DESC
+        FETCH FIRST :n ROWS ONLY
+    """
+    cur.execute(awr_sql, {"schema": schema.upper() if schema else None, "n": top_n, "inner_n": top_n * 3, "snap_begin": snap_begin, "snap_end": snap_end})
+    results = []
+    for r in cur.fetchall():
+        results.append({
+            "sqlId": r[0],
+            "sqlText": r[1] or "",
+            "elapsed": round(r[3] / 1000000, 2),
+            "cpuTime": round(r[2] / 1000000, 2),
+            "logicalReads": int(r[4]),
+            "physicalReads": int(r[5]),
+            "executions": int(r[6]),
+            "source": "awr",
+            "module": r[8] or "",
+            "instanceName": inst_name,
+            "schemaName": r[9] or "",
+            "planHashValue": str(r[10]) if r[10] else "",
+        })
+    cur.close()
+    conn.close()
+    return results
+
+
+@router.get("/top-sql")
+def get_top_sql(
+    source: str = Query(default="all", description="v$sql, awr, or all"),
+    instance: str = Query(default="all", description="Instance id or 'all'"),
+    top_n: int = Query(default=50, ge=1, le=500),
+    begin_time: str = Query(default="", description="AWR begin time (YYYY-MM-DD HH24:MI:SS)"),
+    end_time: str = Query(default="", description="AWR end time (YYYY-MM-DD HH24:MI:SS)"),
+    schema: str = Query(default="", description="Schema name filter (empty=all)"),
+    sort_key: str = Query(default="elapsed", description="elapsed, cpuTime, logicalReads, physicalReads, executions"),
+    value_mode: str = Query(default="total", description="total or avg"),
+):
+    """등록된 Oracle 인스턴스에서 V$SQL/AWR Top SQL 실시간 조회"""
+    instances = _get_oracle_instances()
+    if instance != "all":
+        instances = [i for i in instances if i['id'] == instance]
+
+    all_results = []
+    for inst in instances:
+        try:
+            if source in ("all", "v$sql"):
+                all_results.extend(_query_vsql(
+                    inst['host'], inst['port'], inst['sid'],
+                    inst['db_user'], inst['db_password'],
+                    schema or '', top_n, inst['name'],
+                    sort_key=sort_key, value_mode=value_mode
+                ))
+            if source in ("all", "awr"):
+                all_results.extend(_query_awr(
+                    inst['host'], inst['port'], inst['sid'],
+                    inst['db_user'], inst['db_password'],
+                    schema or '', top_n, inst['name'],
+                    begin_time=begin_time or None, end_time=end_time or None,
+                    sort_key=sort_key, value_mode=value_mode
+                ))
+        except Exception as e:
+            logger.error(f"Oracle query failed for {inst['name']}: {e}")
+
+    # 중복 제거 (V$SQL 우선)
+    seen = set()
+    deduped = []
+    for item in all_results:
+        key = f"{item['sqlId']}@{item['instanceName']}"
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+
+    return deduped
+
+
+@router.get("/oracle/instances")
+def get_oracle_instances():
+    """등록된 Oracle 인스턴스 목록"""
+    instances = _get_oracle_instances()
+    return [{
+        "id": i["id"], "name": i["name"], "schema": i["schema_name"],
+        "alias": i.get("alias"), "instance_type": i.get("instance_type"),
+    } for i in instances]
+
+
+# ── V$SQL_PLAN 실행계획 조회 ──
+@router.get("/sql-plan")
+def get_sql_plan(
+    sql_id: str = Query(..., description="SQL ID"),
+    plan_hash: str = Query(default="", description="Plan hash value (optional)"),
+    source: str = Query(default="v$sql", description="v$sql or awr"),
+):
+    """Oracle V$SQL_PLAN 또는 DBA_HIST_SQL_PLAN에서 실행계획 조회"""
+    instances = _get_oracle_instances()
+    if not instances:
+        return {"planHashes": [], "rows": []}
+
+    inst = instances[0]
+    from app.clients.oracle import open_oracle_inst
+    conn = open_oracle_inst(inst)
+    cur = conn.cursor()
+
+    use_awr = source.lower() == 'awr'
+
+    # 1. 사용 가능한 plan hash 목록 조회
+    if use_awr:
+        cur.execute("""
+            SELECT DISTINCT plan_hash_value
+            FROM dba_hist_sql_plan
+            WHERE sql_id = :sql_id AND plan_hash_value > 0
+            ORDER BY plan_hash_value
+        """, {"sql_id": sql_id})
+    else:
+        cur.execute("""
+            SELECT DISTINCT plan_hash_value
+            FROM gv$sql_plan
+            WHERE sql_id = :sql_id AND plan_hash_value > 0
+            ORDER BY plan_hash_value
+        """, {"sql_id": sql_id})
+    plan_hashes = [str(r[0]) for r in cur.fetchall()]
+
+    # plan_hash 미지정 시 첫 번째 사용
+    target_hash = plan_hash if plan_hash else (plan_hashes[0] if plan_hashes else "")
+    if not target_hash:
+        cur.close()
+        conn.close()
+        return {"planHashes": plan_hashes, "rows": []}
+
+    # 2. 해당 plan hash의 실행계획 조회
+    if use_awr:
+        cur.execute("""
+            SELECT id, operation, object_name, cardinality, bytes, cost, depth
+            FROM dba_hist_sql_plan
+            WHERE sql_id = :sql_id
+              AND plan_hash_value = :plan_hash
+            ORDER BY id
+        """, {"sql_id": sql_id, "plan_hash": int(target_hash)})
+    else:
+        cur.execute("""
+            SELECT id, operation, object_name, cardinality, bytes, cost, depth
+            FROM gv$sql_plan
+            WHERE sql_id = :sql_id
+              AND plan_hash_value = :plan_hash
+              AND child_number = (
+                  SELECT MIN(child_number) FROM gv$sql_plan
+                  WHERE sql_id = :sql_id AND plan_hash_value = :plan_hash
+              )
+            ORDER BY id
+        """, {"sql_id": sql_id, "plan_hash": int(target_hash)})
+
+    rows = []
+    for r in cur.fetchall():
+        rows.append({
+            "id": r[0],
+            "operation": r[1] or "",
+            "name": r[2] or "",
+            "rows": r[3],
+            "bytes": r[4],
+            "cost": r[5],
+            "depth": r[6] or 0,
+        })
+
+    cur.close()
+    conn.close()
+    return {"planHashes": plan_hashes, "rows": rows}
+
+
+# ── 바인드 변수 조회 (V$SQL_BIND_CAPTURE / DBA_HIST_SQLBIND) ──
+@router.get("/sql-binds")
+def get_sql_binds(
+    sql_id: str = Query(..., description="SQL ID"),
+    source: str = Query(default="auto", description="auto | v$sql | awr"),
+):
+    """Oracle V$SQL_BIND_CAPTURE 우선, 비어있으면 DBA_HIST_SQLBIND fallback."""
+    instances = _get_oracle_instances()
+    if not instances:
+        return []
+
+    inst = instances[0]
+    from app.clients.oracle import open_oracle_inst
+    conn = open_oracle_inst(inst)
+    cur = conn.cursor()
+
+    src = source.lower()
+    use_awr = src == 'awr'
+
+    if use_awr:
+        cur.execute("""
+            SELECT name, datatype_string, value_string,
+                   TO_CHAR(last_captured, 'YYYY-MM-DD HH24:MI:SS') AS captured_at
+            FROM dba_hist_sqlbind
+            WHERE sql_id = :sql_id
+              AND snap_id = (
+                  SELECT MAX(snap_id) FROM dba_hist_sqlbind WHERE sql_id = :sql_id
+              )
+            ORDER BY position
+        """, {"sql_id": sql_id})
+    else:
+        cur.execute("""
+            SELECT name, datatype_string,
+                   COALESCE(value_string,
+                            CASE datatype
+                              WHEN 1  THEN SYS.ANYDATA.ACCESSVARCHAR2(value_anydata)
+                              WHEN 96 THEN SYS.ANYDATA.ACCESSCHAR(value_anydata)
+                              WHEN 2  THEN TO_CHAR(SYS.ANYDATA.ACCESSNUMBER(value_anydata))
+                              WHEN 12 THEN TO_CHAR(SYS.ANYDATA.ACCESSDATE(value_anydata), 'YYYY-MM-DD HH24:MI:SS')
+                              WHEN 180 THEN TO_CHAR(SYS.ANYDATA.ACCESSTIMESTAMP(value_anydata), 'YYYY-MM-DD HH24:MI:SS')
+                              ELSE NULL
+                            END) AS value_string,
+                   TO_CHAR(last_captured, 'YYYY-MM-DD HH24:MI:SS') AS captured_at
+            FROM gv$sql_bind_capture
+            WHERE sql_id = :sql_id
+            ORDER BY position
+        """, {"sql_id": sql_id})
+
+    # source=auto: V$SQL 조회 결과가 0건이면 AWR 로 fallback
+    rows = cur.fetchall()
+    if not rows and src == 'auto':
+        cur.execute("""
+            SELECT name, datatype_string, value_string,
+                   TO_CHAR(last_captured, 'YYYY-MM-DD HH24:MI:SS') AS captured_at
+            FROM dba_hist_sqlbind
+            WHERE sql_id = :sql_id
+              AND snap_id = (
+                  SELECT MAX(snap_id) FROM dba_hist_sqlbind WHERE sql_id = :sql_id
+              )
+            ORDER BY position
+        """, {"sql_id": sql_id})
+        rows = cur.fetchall()
+    results = []
+    seen = set()
+    for r in rows:
+        key = r[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            "name": r[0] or "",
+            "type": r[1] or "",
+            "value": r[2] or "",
+            "capturedAt": r[3] or "",
+        })
+
+    cur.close()
+    conn.close()
+    return results
+
+
+# ── Object Info (테이블/컬럼/인덱스 메타) 조회 ──
+@router.get("/object-info")
+def get_object_info(
+    name: str = Query(..., description="Object name (table)"),
+    schema: str = Query(default="", description="Schema/owner name"),
+):
+    """Oracle 데이터 딕셔너리에서 테이블·컬럼·인덱스 메타 조회"""
+    instances = _get_oracle_instances()
+    if not instances:
+        return None
+
+    inst = instances[0]
+    target_name = name.upper()
+
+    from app.clients.oracle import open_oracle_inst
+    conn = open_oracle_inst(inst)
+    cur = conn.cursor()
+
+    # 1. 테이블 기본 정보 (schema 지정 시 해당 owner, 미지정 시 자동 감지)
+    if schema:
+        cur.execute("""
+            SELECT table_name, owner, num_rows, avg_row_len,
+                   TO_CHAR(last_analyzed, 'YYYY-MM-DD HH24:MI') AS last_analyzed
+            FROM all_tables
+            WHERE table_name = :name AND owner = :schema
+        """, {"name": target_name, "schema": schema.upper()})
+    else:
+        cur.execute("""
+            SELECT table_name, owner, num_rows, avg_row_len,
+                   TO_CHAR(last_analyzed, 'YYYY-MM-DD HH24:MI') AS last_analyzed
+            FROM all_tables
+            WHERE table_name = :name
+              AND owner NOT IN ('SYS','SYSTEM','MDSYS','XDB','WMSYS','CTXSYS','ORDDATA','DBSNMP')
+            ORDER BY last_analyzed DESC NULLS LAST
+            FETCH FIRST 1 ROWS ONLY
+        """, {"name": target_name})
+    tbl = cur.fetchone()
+    if not tbl:
+        cur.close()
+        conn.close()
+        return None
+    target_schema = tbl[1]  # 실제 owner 사용
+
+    # 2. 컬럼 정보
+    cur.execute("""
+        SELECT column_name,
+               CASE
+                 WHEN data_type IN ('VARCHAR2','NVARCHAR2','CHAR','NCHAR','RAW')
+                   THEN data_type || '(' || data_length || ')'
+                 WHEN data_type = 'NUMBER' AND data_precision IS NOT NULL AND data_scale > 0
+                   THEN data_type || '(' || data_precision || ',' || data_scale || ')'
+                 WHEN data_type = 'NUMBER' AND data_precision IS NOT NULL
+                   THEN data_type || '(' || data_precision || ')'
+                 ELSE data_type
+               END AS col_type,
+               nullable, num_distinct, num_nulls
+        FROM all_tab_columns
+        WHERE table_name = :name AND owner = :schema
+        ORDER BY column_id
+    """, {"name": target_name, "schema": target_schema})
+    columns = []
+    for r in cur.fetchall():
+        columns.append({
+            "name": r[0],
+            "type": r[1] or "UNKNOWN",
+            "nullable": r[2] == 'Y',
+            "distinct": r[3],
+            "nullCount": r[4] or 0,
+        })
+
+    # 3. 인덱스 정보
+    cur.execute("""
+        SELECT i.index_name, i.uniqueness, i.index_type,
+               LISTAGG(ic.column_name, ',') WITHIN GROUP (ORDER BY ic.column_position) AS cols
+        FROM all_indexes i
+        JOIN all_ind_columns ic ON ic.index_name = i.index_name AND ic.index_owner = i.owner
+        WHERE i.table_name = :name AND i.table_owner = :schema
+        GROUP BY i.index_name, i.uniqueness, i.index_type
+        ORDER BY i.index_name
+    """, {"name": target_name, "schema": target_schema})
+    indexes = []
+    for r in cur.fetchall():
+        idx_type = "UNIQUE" if r[1] == "UNIQUE" else ("BITMAP" if "BITMAP" in (r[2] or "") else "NORMAL")
+        indexes.append({
+            "name": r[0],
+            "type": idx_type,
+            "columns": (r[3] or "").split(","),
+        })
+
+    cur.close()
+    conn.close()
+
+    return {
+        "name": tbl[0],
+        "type": "TABLE",
+        "schema": tbl[1],
+        "totalRows": tbl[2],
+        "avgRowBytes": tbl[3],
+        "lastAnalyzed": tbl[4],
+        "columns": columns,
+        "indexes": indexes,
+    }
+
+
+# ── Batch column meta for bind type inference ──────────────────────────────
+from pydantic import BaseModel as _BM
+from typing import List as _List
+
+class TableRef(_BM):
+    owner: str
+    table_name: str
+
+@router.post("/sql-meta/columns")
+def get_columns_batch(tables: _List[TableRef]):
+    """여러 테이블의 컬럼+데이터타입을 단일 쿼리로 일괄 조회."""
+    if not tables:
+        return []
+    instances = _get_oracle_instances()
+    if not instances:
+        return []
+    inst = instances[0]
+    from app.clients.oracle import open_oracle_inst
+    conn = open_oracle_inst(inst)
+    cur = conn.cursor()
+    try:
+        # IN 절을 owner/table_name 쌍으로 구성
+        pairs_sql = " OR ".join(
+            f"(owner = :o{i} AND table_name = :t{i})"
+            for i in range(len(tables))
+        )
+        params = {}
+        for i, t in enumerate(tables):
+            params[f"o{i}"] = t.owner.upper()
+            params[f"t{i}"] = t.table_name.upper()
+        cur.execute(
+            f"""SELECT owner, table_name, column_name, data_type,
+                       data_length, data_precision, data_scale
+                FROM all_tab_columns
+                WHERE ({pairs_sql})
+                ORDER BY owner, table_name, column_id""",
+            params,
+        )
+        results = []
+        for r in cur.fetchall():
+            results.append({
+                "owner": r[0],
+                "tableName": r[1],
+                "columnName": r[2],
+                "dataType": r[3],
+                "dataLength": r[4],
+                "dataPrecision": r[5],
+                "dataScale": r[6],
+            })
+        return results
+    except Exception as e:
+        logger.error(f"get_columns_batch failed: {e}")
+        return []
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass

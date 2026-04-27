@@ -1,0 +1,804 @@
+"""[1단계] POST /api/tuning/requests — 튜닝 요청 등록 + before 캡처.
+
+흐름:
+1. sql_texts(as_is) UPSERT (sha1(sql_text+schema) 기반 sql_id)
+2. tuning_requests INSERT (status='requested')
+3. Oracle 실행: EXPLAIN PLAN + 실 SELECT → sql_plans(before), sql_performance(before)
+4. binds → sql_bind_variables
+5. 부분 실패 시 status='failed' 갱신, 응답 일관 유지
+
+엄격:
+- SELECT/WITH 만 허용. DDL/DML 즉시 거부
+- 시간 단위는 Second, 카운트는 Count (컬럼명 suffix 일치)
+- 단일 statement만 허용 (주석 제거 후 ; 검출)
+"""
+import hashlib
+import logging
+import re
+import time
+from typing import Optional, Union
+
+import oracledb
+from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import text as sql_text
+from sqlalchemy.orm import Session
+
+from app.api.oracle_top_sql import _get_oracle_instances
+from app.db.session import get_db
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api", tags=["tuning_requests"])
+
+_SELECT_RE = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+
+
+# ── 요청/응답 모델 ──
+class BindVar(BaseModel):
+    name: str
+    # 프론트가 number/bool/null 도 보낼 수 있도록 Union 허용
+    value: Optional[Union[str, int, float, bool]] = None
+    data_type: str = "VARCHAR2"
+    position: Optional[int] = None
+
+
+class TuningRequestBody(BaseModel):
+    sql_text: str
+    schema_name: Optional[str] = None
+    instance_id: str
+    binds: list[BindVar] = []
+    user_instruction: Optional[str] = None
+    source: str = "ui"
+    requested_by: Optional[str] = None
+    auto_tune: bool = False
+    complex_case: bool = False
+
+
+class BeforePerformance(BaseModel):
+    elapsed_time_sec: Optional[float] = None
+    cpu_time_sec: Optional[float] = None
+    buffer_gets_count: Optional[int] = None
+    disk_reads_count: Optional[int] = None
+    executions_count: Optional[int] = None
+    rows_processed_count: Optional[int] = None
+
+
+class BulkDeleteBody(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+
+
+class BulkDeleteResponse(BaseModel):
+    deleted_request_ids: list[int]
+    deleted_sql_plans: int
+    deleted_sql_performance: int
+    deleted_llm_call_log: int = 0
+
+
+class TuningRequestResponse(BaseModel):
+    request_id: int
+    status: str
+    source_sql_id: int
+    before_performance: Optional[BeforePerformance] = None
+    before_plan: Optional[str] = None
+    message: Optional[str] = None
+    # 2단계(auto_tune) 결과
+    tuning_outcome: Optional[dict] = None
+
+
+# ── 헬퍼 ──
+def _sql_hash(sql: str, schema: Optional[str]) -> str:
+    raw = (schema or "") + "\x00" + sql.strip()
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _strip_sql_for_check(sql: str) -> str:
+    s = re.sub(r"--[^\n]*", "", sql)
+    s = re.sub(r"/\*[\s\S]*?\*/", "", s)
+    return s
+
+
+def _convert_bind(bv: BindVar):
+    v = bv.value
+    if v is None:
+        return None
+    # 이미 number/bool 이면 그대로
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v
+    if isinstance(v, bool):
+        return 1 if v else 0
+    s2 = str(v).strip()
+    if not s2:
+        return None
+    t = bv.data_type.upper()
+    if t in ("NUMBER", "INT", "INTEGER", "FLOAT", "DECIMAL"):
+        try:
+            return float(s2) if "." in s2 else int(s2)
+        except ValueError:
+            return s2
+    if "DATE" in t or "TIMESTAMP" in t:
+        # 다양한 입력 형식 → datetime 객체로 변환 (oracledb 가 DATE/TIMESTAMP 자동 처리)
+        from datetime import datetime
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                    "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
+                    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%d-%b-%y", "%d-%b-%Y"):
+            try: return datetime.strptime(s2, fmt)
+            except ValueError: continue
+        # 파싱 실패 시 문자열 그대로 (Oracle 측 NLS_DATE_FORMAT 의존)
+        return s2
+    return s2
+
+
+def _resolve_instance(instance_id: str) -> Optional[dict]:
+    # 1) id 기준 매칭
+    for inst in _get_oracle_instances():
+        if str(inst["id"]) == str(instance_id):
+            return inst
+    # 2) 폴백: name 으로도 찾기 (프론트가 instance_name 을 instance_id 슬롯에 넣어 보내는 케이스 대응)
+    for inst in _get_oracle_instances():
+        if inst.get("name") == instance_id:
+            return inst
+    return None
+
+
+def _upsert_as_is_sql(db: Session, *, sql_text_str: str, schema_name: Optional[str],
+                     instance_name: Optional[str]) -> int:
+    """sql_texts(as_is) UPSERT. (sql_id, sql_type='as_is') UNIQUE 보장."""
+    sid = _sql_hash(sql_text_str, schema_name)
+    row = db.execute(
+        sql_text("SELECT id FROM sql_texts WHERE sql_id = :sid AND sql_type = 'as_is'"),
+        {"sid": sid},
+    ).first()
+    if row:
+        return int(row[0])
+    res = db.execute(
+        sql_text(
+            "INSERT INTO sql_texts (sql_id, sql_text, schema_name, instance_name, sql_type) "
+            "VALUES (:sid, :txt, :sch, :inst, 'as_is') RETURNING id"
+        ),
+        {"sid": sid, "txt": sql_text_str, "sch": schema_name, "inst": instance_name},
+    )
+    return int(res.scalar_one())
+
+
+def _capture_before(inst: dict, sql: str, schema: Optional[str], binds: list[BindVar]
+                   ) -> tuple[Optional[str], Optional[BeforePerformance], Optional[str], bool]:
+    """Oracle 접속 → EXPLAIN PLAN + 실 수행 + V$SQL 통계 캡처.
+    Returns: (plan_text, perf, error_msg, wall_clock_fallback)."""
+    from app.clients.oracle import open_oracle_inst
+    conn = open_oracle_inst(inst)
+    cur = conn.cursor()
+    plan_text: Optional[str] = None
+    perf: Optional[BeforePerformance] = None
+    err: Optional[str] = None
+    sql_id_oracle: Optional[str] = None
+    try:
+        if schema:
+            try:
+                cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {schema}")
+            except Exception as e:
+                logger.warning(f"ALTER SESSION schema failed: {e}")
+
+        # EXPLAIN PLAN — 부작용 없음
+        try:
+            bind_dict = {bv.name: _convert_bind(bv) for bv in binds}
+            cur.execute("EXPLAIN PLAN FOR " + sql, bind_dict)
+            cur.execute(
+                "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, NULL, "
+                "'BASIC ROWS BYTES COST PREDICATE'))"
+            )
+            plan_text = "\n".join(r[0] for r in cur.fetchall())
+        except Exception as e:
+            plan_text = f"-- EXPLAIN PLAN 실패: {type(e).__name__}: {e}"
+
+        # 실 수행 — wall time 측정
+        wall_t0 = time.time()
+        try:
+            cur.execute(sql, bind_dict)
+            # rowcount/processed_rows 계산용 fetch (제한적)
+            fetched = cur.fetchmany(1000) if cur.description else []
+            wall_elapsed_sec = time.time() - wall_t0
+            rows_processed = len(fetched)
+        except Exception as e:
+            err = f"실행 실패: {type(e).__name__}: {e}"
+            return plan_text, None, err, False
+
+        # V$SQL 통계 — sql_id로 조회. EXPLAIN PLAN 시점이 아니라 실 수행한 cursor 기준.
+        try:
+            cur.execute("SELECT prev_sql_id FROM v$session WHERE sid = SYS_CONTEXT('USERENV','SID')")
+            row = cur.fetchone()
+            sql_id_oracle = row[0] if row else None
+        except Exception as e:
+            logger.warning(f"prev_sql_id lookup failed: {e}")
+
+        elapsed_sec = wall_elapsed_sec
+        cpu_sec = None
+        buffer_gets = None
+        disk_reads = None
+        executions = None
+        gv_sql_hit = False
+        if sql_id_oracle:
+            try:
+                cur.execute(
+                    "SELECT SUM(elapsed_time)/1000000, SUM(cpu_time)/1000000, "
+                    "SUM(buffer_gets), SUM(disk_reads), SUM(executions), SUM(rows_processed) "
+                    "FROM gv$sql WHERE sql_id = :sid",
+                    {"sid": sql_id_oracle},
+                )
+                r = cur.fetchone()
+                if r and r[0] is not None:
+                    elapsed_sec = float(r[0])
+                    cpu_sec = float(r[1]) if r[1] is not None else None
+                    buffer_gets = int(r[2]) if r[2] is not None else None
+                    disk_reads = int(r[3]) if r[3] is not None else None
+                    executions = int(r[4]) if r[4] is not None else None
+                    rows_processed = int(r[5]) if r[5] is not None else rows_processed
+                    gv_sql_hit = True
+            except Exception as e:
+                logger.warning(f"V$SQL stats lookup failed: {e}")
+
+        perf = BeforePerformance(
+            elapsed_time_sec=round(elapsed_sec, 6) if elapsed_sec is not None else None,
+            cpu_time_sec=round(cpu_sec, 6) if cpu_sec is not None else None,
+            buffer_gets_count=buffer_gets,
+            disk_reads_count=disk_reads,
+            executions_count=executions,
+            rows_processed_count=rows_processed,
+        )
+        return plan_text, perf, None, (not gv_sql_hit)
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+
+
+# ── 메인 엔드포인트 ──
+@router.post("/tuning/requests", response_model=TuningRequestResponse)
+def create_tuning_request(body: TuningRequestBody, db: Session = Depends(get_db)) -> TuningRequestResponse:
+    sql = body.sql_text.strip().rstrip(";")
+    if not sql:
+        raise HTTPException(400, "sql_text is empty")
+    if not _SELECT_RE.match(sql):
+        raise HTTPException(400, "Only SELECT / WITH queries are allowed")
+    sql_no_comments = _strip_sql_for_check(sql)
+    if ";" in sql_no_comments:
+        raise HTTPException(400, "Multiple statements not allowed")
+
+    inst = _resolve_instance(body.instance_id)
+    if not inst:
+        raise HTTPException(404, f"Oracle instance not found or inactive: {body.instance_id}")
+
+    # 1) sql_texts(as_is) UPSERT
+    source_sql_id = _upsert_as_is_sql(
+        db, sql_text_str=sql, schema_name=body.schema_name, instance_name=inst.get("name"),
+    )
+
+    # 2) tuning_requests INSERT
+    res = db.execute(
+        sql_text(
+            "INSERT INTO tuning_requests "
+            "(source_sql_id, source, status, user_instruction, requested_by) "
+            "VALUES (:sid, :src, 'requested', :ui, :rb) RETURNING id"
+        ),
+        {"sid": source_sql_id, "src": body.source,
+         "ui": body.user_instruction, "rb": body.requested_by},
+    )
+    request_id = int(res.scalar_one())
+
+    # 4) sql_bind_variables (Oracle 접속 전 적재 — DB 메타이므로 실패 영향 없음)
+    for bv in body.binds:
+        db.execute(
+            sql_text(
+                "INSERT INTO sql_bind_variables (sql_id, name, data_type, value, position) "
+                "VALUES (:sid, :n, :dt, :v, :p)"
+            ),
+            {"sid": source_sql_id, "n": bv.name, "dt": bv.data_type,
+             "v": (None if bv.value is None else str(bv.value)),
+             "p": bv.position},
+        )
+    db.commit()
+
+    # 3) Oracle 실 캡처
+    try:
+        plan, perf, exec_err, before_fallback = _capture_before(inst, sql, body.schema_name, body.binds)
+    except Exception as e:
+        logger.exception("before capture failed")
+        db.execute(
+            sql_text("UPDATE tuning_requests SET status='failed' WHERE id=:rid"),
+            {"rid": request_id},
+        )
+        db.commit()
+        raise HTTPException(500, f"Oracle capture failed: {type(e).__name__}: {e}")
+
+    # 5) 캡처 결과 적재
+    if plan:
+        db.execute(
+            sql_text(
+                "INSERT INTO sql_plans (request_id, sql_id, phase, plan_text) "
+                "VALUES (:rid, :sid, 'before', :pt)"
+            ),
+            {"rid": request_id, "sid": source_sql_id, "pt": plan},
+        )
+    if perf:
+        db.execute(
+            sql_text(
+                "INSERT INTO sql_performance "
+                "(request_id, sql_id, phase, elapsed_time_sec, cpu_time_sec, "
+                " buffer_gets_count, disk_reads_count, executions_count, rows_processed_count) "
+                "VALUES (:rid, :sid, 'before', :el, :cp, :bg, :dr, :ex, :rp)"
+            ),
+            {"rid": request_id, "sid": source_sql_id,
+             "el": perf.elapsed_time_sec, "cp": perf.cpu_time_sec,
+             "bg": perf.buffer_gets_count, "dr": perf.disk_reads_count,
+             "ex": perf.executions_count, "rp": perf.rows_processed_count},
+        )
+
+    if exec_err:
+        db.execute(
+            sql_text("UPDATE tuning_requests SET status='failed' WHERE id=:rid"),
+            {"rid": request_id},
+        )
+        db.commit()
+        return TuningRequestResponse(
+            request_id=request_id, status="failed", source_sql_id=source_sql_id,
+            before_plan=plan, before_performance=perf, message=exec_err,
+        )
+
+    db.commit()
+    # before 캡처가 wall-clock fallback 사용한 경우 마커 append
+    if before_fallback:
+        db.execute(
+            sql_text("UPDATE tuning_requests SET rationale = "
+                     "COALESCE(rationale, '') || '\n\n[wall_clock_fallback]' "
+                     "WHERE id = :rid"),
+            {"rid": request_id},
+        )
+        db.commit()
+    # auto_tune=True 면 즉시 2단계 실행
+    outcome_dict = None
+    final_status = "requested"
+    if body.auto_tune:
+        from app.services.tuning_pipeline import run_tuning_job
+        try:
+            outcome = run_tuning_job(
+                db, request_id=request_id, inst=inst, as_is_sql=sql,
+                before_plan=plan, before_perf=perf or BeforePerformance(),
+                binds=body.binds, schema_name=body.schema_name,
+                user_instruction=body.user_instruction,
+                complex_case=body.complex_case,
+            )
+            outcome_dict = {
+                "attempts": outcome.attempts,
+                "rationale": outcome.rationale,
+                "improvement_pct": outcome.improvement_pct,
+                "buffer_improvement_pct": outcome.buffer_improvement_pct,
+                "after": outcome.after.dict() if outcome.after else None,
+                "after_plan": outcome.after_plan,
+            }
+            final_status = outcome.status
+        except Exception as e:
+            logger.exception("auto_tune failed")
+            db.execute(sql_text(
+                "UPDATE tuning_requests SET status='failed', rationale=:r WHERE id=:i"
+            ), {"r": f"파이프라인 실패: {type(e).__name__}: {e}", "i": request_id})
+            db.commit()
+            final_status = "failed"
+            outcome_dict = {"error": f"{type(e).__name__}: {e}"}
+    return TuningRequestResponse(
+        request_id=request_id, status=final_status, source_sql_id=source_sql_id,
+        before_performance=perf, before_plan=plan,
+        tuning_outcome=outcome_dict,
+    )
+
+
+@router.get("/tuning/requests")
+def list_tuning_requests(
+    status: Optional[list[str]] = Query(default=None),
+    source: Optional[str] = None,
+    schema_name: Optional[str] = None,
+    instance_id: Optional[str] = None,
+    from_date: Optional[str] = None,    # ISO 8601
+    to_date: Optional[str] = None,      # ISO 8601
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """튜닝 요청 목록 — 프론트 WorkPipeline 용 요약 형식."""
+    where = []
+    params: dict = {"limit": limit, "offset": offset}
+    if status:
+        # IN 절 — 동적 placeholder
+        ph = ", ".join(f":st_{i}" for i, _ in enumerate(status))
+        where.append(f"r.status IN ({ph})")
+        for i, st in enumerate(status):
+            params[f"st_{i}"] = st
+    if source:
+        where.append("r.source = :src"); params["src"] = source
+    if schema_name:
+        where.append("st.schema_name = :sch"); params["sch"] = schema_name
+    if instance_id:
+        # instance_id 는 db_instances.id (varchar). sql_texts.instance_name 으로는 직접 join 안 됨.
+        # 우선 instance_name 매칭으로 처리 (instance_id 와 매핑되는 name 조회 후 비교)
+        from app.api.oracle_top_sql import _get_oracle_instances
+        names = [i["name"] for i in _get_oracle_instances() if str(i["id"]) == str(instance_id)]
+        if names:
+            where.append("st.instance_name = :inst_name"); params["inst_name"] = names[0]
+        else:
+            return []  # 매칭 인스턴스 없음
+    if from_date:
+        where.append("r.requested_at >= :from_dt"); params["from_dt"] = from_date
+    if to_date:
+        where.append("r.requested_at <= :to_dt"); params["to_dt"] = to_date
+    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    q = f"""
+        SELECT r.id, r.status, r.source, r.source_sql_id, r.tuned_sql_id,
+               substring(st.sql_text from 1 for 100) AS source_sql_text_preview,
+               st.schema_name, st.instance_name,
+               r.requested_at, r.completed_at,
+               r.llm_provider, r.llm_model, r.rationale,
+               (
+                 SELECT b.elapsed_time_sec FROM sql_performance b
+                 WHERE b.request_id = r.id AND b.phase = 'before'
+                 ORDER BY b.captured_at LIMIT 1
+               ) AS before_elapsed_sec,
+               (
+                 SELECT a.elapsed_time_sec FROM sql_performance a
+                 WHERE a.request_id = r.id AND a.phase IN ('after','applied')
+                 ORDER BY a.captured_at DESC LIMIT 1
+               ) AS after_elapsed_sec,
+               (
+                 SELECT b.buffer_gets_count FROM sql_performance b
+                 WHERE b.request_id = r.id AND b.phase = 'before'
+                 ORDER BY b.captured_at LIMIT 1
+               ) AS before_buffer_gets,
+               (
+                 SELECT a.buffer_gets_count FROM sql_performance a
+                 WHERE a.request_id = r.id AND a.phase IN ('after','applied')
+                 ORDER BY a.captured_at DESC LIMIT 1
+               ) AS after_buffer_gets,
+               st.sql_id AS source_sql_id_hash,
+               (SELECT t2.sql_id FROM sql_texts t2 WHERE t2.id = r.tuned_sql_id) AS tuned_sql_id_hash,
+               r.requested_by
+        FROM tuning_requests r
+        LEFT JOIN sql_texts st ON st.id = r.source_sql_id
+        {where_clause}
+        ORDER BY r.requested_at DESC
+        LIMIT :limit OFFSET :offset
+    """
+    rows = db.execute(sql_text(q), params).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        rationale = r[12] or ""
+        before = float(r[13]) if r[13] is not None else None
+        after = float(r[14]) if r[14] is not None else None
+        improvement_pct = None
+        if before and before > 0 and after is not None:
+            improvement_pct = (before - after) / before
+        out.append({
+            "id": r[0],
+            "status": r[1],
+            "source": r[2],
+            "source_sql_id": r[3],
+            "tuned_sql_id": r[4],
+            "source_sql_text_preview": r[5],
+            "schema_name": r[6],
+            "instance_name": r[7],
+            "requested_at": str(r[8]) if r[8] else None,
+            "completed_at": str(r[9]) if r[9] else None,
+            "llm_provider": r[10],
+            "llm_model": r[11],
+            "improvement_pct": (round(improvement_pct, 4) if improvement_pct is not None else None),
+            "is_no_improve": "[no_improve]" in rationale,
+            "is_wall_clock_fallback": "[wall_clock_fallback]" in rationale,
+            "rationale": rationale,
+            "before_elapsed_sec": before,
+            "after_elapsed_sec": after,
+            "before_buffer_gets": int(r[15]) if r[15] is not None else None,
+            "after_buffer_gets": int(r[16]) if r[16] is not None else None,
+            "source_sql_id_hash": r[17],
+            "tuned_sql_id_hash": r[18],
+            "requested_by": r[19],
+        })
+    return out
+
+
+@router.post("/tuning/requests/delete", response_model=BulkDeleteResponse)
+def delete_tuning_requests(body: BulkDeleteBody, db: Session = Depends(get_db)) -> BulkDeleteResponse:
+    """선택된 tuning_requests 를 일괄 삭제.
+
+    - `parent_request_id` 체인을 recursive 하게 풀어 자식 요청도 함께 삭제 (FK RESTRICT 회피).
+    - `sql_plans` / `sql_performance` 의 request_id 참조도 함께 삭제.
+    - `sql_texts` 는 다른 요청이 참조할 수 있으므로 손대지 않음.
+    """
+    if not body.ids:
+        return BulkDeleteResponse(deleted_request_ids=[], deleted_sql_plans=0, deleted_sql_performance=0, deleted_llm_call_log=0)
+
+    # 1) 대상 + 모든 descendant 수집
+    desc_rows = db.execute(
+        sql_text(
+            """
+            WITH RECURSIVE descendants(id) AS (
+                SELECT id FROM tuning_requests WHERE id = ANY(:ids)
+                UNION
+                SELECT tr.id FROM tuning_requests tr
+                JOIN descendants d ON tr.parent_request_id = d.id
+            )
+            SELECT id FROM descendants
+            """
+        ),
+        {"ids": body.ids},
+    ).fetchall()
+    all_ids = [int(r[0]) for r in desc_rows]
+    if not all_ids:
+        return BulkDeleteResponse(deleted_request_ids=[], deleted_sql_plans=0, deleted_sql_performance=0, deleted_llm_call_log=0)
+
+    # 2) 자식 테이블 먼저 삭제
+    plans_deleted = db.execute(
+        sql_text("DELETE FROM sql_plans WHERE request_id = ANY(:ids)"),
+        {"ids": all_ids},
+    ).rowcount or 0
+    perf_deleted = db.execute(
+        sql_text("DELETE FROM sql_performance WHERE request_id = ANY(:ids)"),
+        {"ids": all_ids},
+    ).rowcount or 0
+    llm_log_deleted = db.execute(
+        sql_text("DELETE FROM llm_call_log WHERE request_id = ANY(:ids)"),
+        {"ids": all_ids},
+    ).rowcount or 0
+
+    # 3) tuning_requests 내부 self-FK 제거 (parent_request_id 가 삭제 대상을 가리키는 것 포함)
+    db.execute(
+        sql_text("UPDATE tuning_requests SET parent_request_id = NULL "
+                 "WHERE parent_request_id = ANY(:ids)"),
+        {"ids": all_ids},
+    )
+
+    # 4) 본체 삭제
+    db.execute(
+        sql_text("DELETE FROM tuning_requests WHERE id = ANY(:ids)"),
+        {"ids": all_ids},
+    )
+    db.commit()
+
+    logger.info(
+        f"delete_tuning_requests requested={body.ids} expanded={all_ids} "
+        f"plans={plans_deleted} perf={perf_deleted} llm_call_log={llm_log_deleted}"
+    )
+    return BulkDeleteResponse(
+        deleted_request_ids=all_ids,
+        deleted_sql_plans=plans_deleted,
+        deleted_sql_performance=perf_deleted,
+        deleted_llm_call_log=llm_log_deleted,
+    )
+
+
+@router.get("/tuning/requests/{request_id}")
+def get_tuning_request(request_id: int, db: Session = Depends(get_db)) -> dict:
+    """튜닝 요청 단건 조회 — 폴링용."""
+    row = db.execute(
+        sql_text(
+            "SELECT id, source_sql_id, tuned_sql_id, status, rationale, "
+            "       llm_provider, llm_model, input_tokens, output_tokens, latency_ms, "
+            "       requested_at, completed_at "
+            "FROM tuning_requests WHERE id = :rid"
+        ),
+        {"rid": request_id},
+    ).first()
+    if not row:
+        raise HTTPException(404, f"request not found: {request_id}")
+    keys = ["id","source_sql_id","tuned_sql_id","status","rationale","llm_provider",
+            "llm_model","input_tokens","output_tokens","latency_ms",
+            "requested_at","completed_at"]
+    base = {k: (str(v) if "_at" in k and v is not None else v) for k, v in zip(keys, row)}
+    # AS-IS / TO-BE SQL 본문 — 프론트 Diff 표시용
+    base["source_sql_text"] = (
+        db.execute(sql_text("SELECT sql_text FROM sql_texts WHERE id=:id"),
+                   {"id": base["source_sql_id"]}).scalar()
+        if base.get("source_sql_id") else None
+    )
+    base["tuned_sql_text"] = (
+        db.execute(sql_text("SELECT sql_text FROM sql_texts WHERE id=:id"),
+                   {"id": base["tuned_sql_id"]}).scalar()
+        if base.get("tuned_sql_id") else None
+    )
+    perf_rows = db.execute(
+        sql_text(
+            "SELECT phase, elapsed_time_sec, cpu_time_sec, buffer_gets_count, "
+            "       disk_reads_count, executions_count, rows_processed_count, captured_at "
+            "FROM sql_performance WHERE request_id = :rid ORDER BY captured_at"
+        ), {"rid": request_id},
+    ).fetchall()
+    pkeys = ["phase","elapsed_time_sec","cpu_time_sec","buffer_gets_count",
+             "disk_reads_count","executions_count","rows_processed_count","captured_at"]
+    base["performance"] = [
+        {k: (str(v) if k=="captured_at" and v is not None else (float(v) if isinstance(v, (int,float)) and k.endswith("_sec") else v))
+         for k, v in zip(pkeys, r)} for r in perf_rows
+    ]
+    plan_rows = db.execute(
+        sql_text("SELECT phase, plan_text, captured_at FROM sql_plans "
+                 "WHERE request_id = :rid ORDER BY captured_at"), {"rid": request_id},
+    ).fetchall()
+    base["plans"] = [
+        {"phase": r[0], "plan_text": r[1], "captured_at": str(r[2])} for r in plan_rows
+    ]
+    return base
+
+
+# ── [3] 승인 / [4] 적용 ──
+
+# 상태 전이 그래프: previous → required current state
+_NEXT_FROM = {
+    "approved": "completed",   # approve 하려면 현재 completed 여야 함
+    "applied": "approved",     # apply 하려면 현재 approved 여야 함
+    "rejected": "completed",   # reject 하려면 현재 completed 여야 함
+}
+
+
+def _enforce_transition(db: Session, request_id: int, target: str) -> dict:
+    """현재 status 가 _NEXT_FROM[target] 와 일치하는지 검증. dict(row) 반환."""
+    row = db.execute(
+        sql_text(
+            "SELECT id, source_sql_id, tuned_sql_id, status FROM tuning_requests WHERE id=:rid"
+        ),
+        {"rid": request_id},
+    ).first()
+    if not row:
+        raise HTTPException(404, f"request not found: {request_id}")
+    rec = {"id": row[0], "source_sql_id": row[1], "tuned_sql_id": row[2], "status": row[3]}
+    required = _NEXT_FROM[target]
+    if rec["status"] != required:
+        raise HTTPException(
+            409, f"invalid transition: status={rec['status']}, required={required} for {target}"
+        )
+    return rec
+
+
+@router.patch("/tuning/requests/{request_id}/approve")
+def approve_tuning_request(request_id: int, db: Session = Depends(get_db)) -> dict:
+    """[3] 승인. status: completed → approved."""
+    rec = _enforce_transition(db, request_id, "approved")
+    if not rec["tuned_sql_id"]:
+        raise HTTPException(409, "tuned_sql_id is null — cannot approve")
+    db.execute(
+        sql_text("UPDATE tuning_requests SET status='approved' WHERE id=:rid"),
+        {"rid": request_id},
+    )
+    db.commit()
+    return {"request_id": request_id, "status": "approved"}
+
+
+class RejectBody(BaseModel):
+    reason: str
+
+
+@router.patch("/tuning/requests/{request_id}/reject")
+def reject_tuning_request(request_id: int, body: RejectBody, db: Session = Depends(get_db)) -> dict:
+    """검토 반려. status: completed → rejected. rationale 끝에 [reject:<reason>] 마커."""
+    rec = _enforce_transition(db, request_id, "rejected")
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "reason is required")
+    db.execute(
+        sql_text(
+            "UPDATE tuning_requests SET status='rejected', "
+            "rationale = COALESCE(rationale, '') || :marker "
+            "WHERE id=:rid"
+        ),
+        {"rid": request_id, "marker": f" [reject:{reason}]"},
+    )
+    db.commit()
+    return {"request_id": request_id, "status": "rejected", "reason": reason}
+
+
+class ApplyResponse(BaseModel):
+    request_id: int
+    status: str
+    applied_performance: Optional[BeforePerformance] = None
+    applied_plan: Optional[str] = None
+    message: Optional[str] = None
+
+
+class ApplyBody(BaseModel):
+    instance_id: Optional[str] = None       # None 이면 sql_texts.instance_name 으로 추정
+    schema_name: Optional[str] = None       # None 이면 to_be sql_texts 의 schema_name 사용
+
+
+def _resolve_instance_by_name(name: Optional[str]) -> Optional[dict]:
+    if not name: return None
+    for inst in _get_oracle_instances():
+        if inst.get("name") == name: return inst
+    return None
+
+
+@router.post("/tuning/requests/{request_id}/apply", response_model=ApplyResponse)
+def apply_tuning_request(request_id: int, body: ApplyBody = ApplyBody(),
+                        db: Session = Depends(get_db)) -> ApplyResponse:
+    """[4] 적용 후 측정. status: approved → applied. TO-BE 를 재실행해 phase='applied' 적재."""
+    rec = _enforce_transition(db, request_id, "applied")
+    if not rec["tuned_sql_id"]:
+        raise HTTPException(409, "tuned_sql_id is null — cannot apply")
+
+    # TO-BE SQL + 메타 조회
+    row = db.execute(
+        sql_text(
+            "SELECT sql_text, schema_name, instance_name FROM sql_texts WHERE id=:tid"
+        ),
+        {"tid": rec["tuned_sql_id"]},
+    ).first()
+    if not row:
+        raise HTTPException(500, f"to_be sql_text not found: id={rec['tuned_sql_id']}")
+    to_be_sql, to_be_schema, to_be_instance_name = row[0], row[1], row[2]
+
+    # 인스턴스 결정: body.instance_id 우선, 없으면 instance_name 으로 lookup
+    inst = None
+    if body.instance_id:
+        inst = _resolve_instance(body.instance_id)
+    if inst is None:
+        inst = _resolve_instance_by_name(to_be_instance_name)
+    if inst is None:
+        raise HTTPException(
+            404, f"Oracle instance not found for apply: instance_id={body.instance_id}, name={to_be_instance_name}",
+        )
+
+    schema = body.schema_name or to_be_schema
+
+    # 바인드는 sql_bind_variables 에서 source(as_is) 기준으로 가져와 재사용
+    bind_rows = db.execute(
+        sql_text(
+            "SELECT name, data_type, value, position FROM sql_bind_variables "
+            "WHERE sql_id=:sid ORDER BY position NULLS LAST, id"
+        ),
+        {"sid": rec["source_sql_id"]},
+    ).fetchall()
+    binds = [BindVar(name=r[0], data_type=r[1] or "VARCHAR2", value=r[2], position=r[3]) for r in bind_rows]
+
+    # 적용 — phase='applied' 로 캡처 (services.tuning_pipeline._capture_after 재사용)
+    from app.services.tuning_pipeline import _capture_after
+    cap = _capture_after(inst, to_be_sql.strip().rstrip(";"), schema, binds)
+    if cap.error:
+        # 실패 시 status='failed' 로만 전이 허용 (스펙)
+        db.execute(
+            sql_text("UPDATE tuning_requests SET status='failed' WHERE id=:rid"),
+            {"rid": request_id},
+        )
+        db.commit()
+        return ApplyResponse(
+            request_id=request_id, status="failed",
+            applied_performance=cap.perf, applied_plan=cap.plan_text,
+            message=cap.error,
+        )
+
+    if cap.plan_text:
+        db.execute(
+            sql_text(
+                "INSERT INTO sql_plans (request_id, sql_id, phase, plan_text) "
+                "VALUES (:rid, :sid, 'applied', :pt)"
+            ),
+            {"rid": request_id, "sid": rec["tuned_sql_id"], "pt": cap.plan_text},
+        )
+    if cap.perf:
+        db.execute(
+            sql_text(
+                "INSERT INTO sql_performance "
+                "(request_id, sql_id, phase, elapsed_time_sec, cpu_time_sec, "
+                " buffer_gets_count, disk_reads_count, executions_count, rows_processed_count) "
+                "VALUES (:rid, :sid, 'applied', :el, :cp, :bg, :dr, :ex, :rp)"
+            ),
+            {"rid": request_id, "sid": rec["tuned_sql_id"],
+             "el": cap.perf.elapsed_time_sec, "cp": cap.perf.cpu_time_sec,
+             "bg": cap.perf.buffer_gets_count, "dr": cap.perf.disk_reads_count,
+             "ex": cap.perf.executions_count, "rp": cap.perf.rows_processed_count},
+        )
+
+    db.execute(
+        sql_text("UPDATE tuning_requests SET status='applied' WHERE id=:rid"),
+        {"rid": request_id},
+    )
+    db.commit()
+
+    return ApplyResponse(
+        request_id=request_id, status="applied",
+        applied_performance=cap.perf, applied_plan=cap.plan_text,
+    )
+

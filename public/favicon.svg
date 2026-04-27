@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <!-- Database cylinder -->
+  <ellipse cx="24" cy="12" rx="16" ry="6" fill="#4f46e5"/>
+  <rect x="8" y="12" width="32" height="20" fill="#4f46e5"/>
+  <ellipse cx="24" cy="32" rx="16" ry="6" fill="#3730a3"/>
+  <ellipse cx="24" cy="12" rx="16" ry="6" fill="#6366f1"/>
+  <ellipse cx="24" cy="22" rx="16" ry="6" fill="none" stroke="#3730a3" stroke-width="0.5" opacity="0.5"/>
+
+  <!-- AI sparkle / brain accent -->
+  <circle cx="37" cy="37" r="10" fill="#ffffff"/>
+  <circle cx="37" cy="37" r="9" fill="#4f46e5"/>
+
+  <!-- AI star symbol -->
+  <path d="M37 30 L38.5 34.5 L43 34.5 L39.5 37 L40.5 41.5 L37 39 L33.5 41.5 L34.5 37 L31 34.5 L35.5 34.5 Z" fill="#c7d2fe"/>
+
+  <!-- Subtle glow lines on DB -->
+  <line x1="14" y1="17" x2="22" y2="17" stroke="#a5b4fc" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+  <line x1="14" y1="20" x2="28" y2="20" stroke="#a5b4fc" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  <line x1="14" y1="23" x2="20" y2="23" stroke="#a5b4fc" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/>
+</svg>

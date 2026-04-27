@@ -1,0 +1,2502 @@
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useObjectInfo } from '../../components/object-info/ObjectInfoContext'
+import { highlightSQL } from '../../utils/sqlHighlight'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { fetchTuningRequest, type TuningRequestDetail, type TuningRequestDetailPerf } from '../../lib/api'
+import { trimPlanHeader } from '../../lib/plan-util'
+
+import { diffArrays } from 'diff'
+import { format as sqlFormat } from 'sql-formatter'
+import {
+  ArrowLeft, CheckCircle2, XCircle, Undo2,
+  AlertTriangle, Loader2, FileText, Calendar,
+  Server, ChevronDown, ChevronUp, Sparkles,
+  Clock, ListChecks, Send, Copy, Check,
+  Ban, RefreshCw, Database, Mail, Hash,
+  CircleDot, X, ChevronLeft, ChevronRight,
+  HelpCircle, Lightbulb, Maximize2,
+} from 'lucide-react'
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ReferenceLine, CartesianGrid,
+} from 'recharts'
+
+import { workItems, type WorkItem } from '../../mocks/workItems'
+import { workBinds, type WorkBindInfo } from '../../mocks/executionValidation'
+import { workRecommendations, type TuningPlan, type TuningType } from '../../mocks/recommendations'
+import { workActionItems, type ActionItem } from '../../mocks/actionItems'
+import { addHistoryEvent } from '../../mocks/workHistory'
+
+import Badge from '../../components/common/Badge'
+import Button from '../../components/common/Button'
+import SourceBadge from '../../components/common/SourceBadge'
+import ImprovementBadge from '../../components/common/ImprovementBadge'
+import ConfirmDialog from '../../components/common/ConfirmDialog'
+import TuningInProgressCard from '../../components/common/TuningInProgressCard'
+import { type ProgressStepNumber } from '../../components/common/ProgressStepBar'
+import WorkbenchContent from './WorkbenchContent'
+
+// AnalysisStep(4) → ProgressStep(5) 매핑
+function analysisStepToProgress(key?: string): ProgressStepNumber {
+  switch (key) {
+    case 'sql_analysis':
+    case 'plan_collection':
+      return 1
+    case 'plan_generation':
+      return 2
+    case 'verification':
+      return 3
+    default:
+      return 1
+  }
+}
+
+// 단계별 한 줄 설명 — ProgressStepBar의 stepDescription slot 용
+const ANALYSIS_STEP_DESC: Record<string, string> = {
+  sql_analysis:    'SQL 구조와 파싱 정보를 분석하고 있습니다',
+  plan_collection: '기존 실행계획을 수집하고 있습니다',
+  plan_generation: 'AI가 대안 SQL을 생성하고 있습니다',
+  verification:    '검증 환경에서 실행해 성능을 측정하고 있습니다',
+}
+import { useEscStack } from '../../utils/escStack'
+import { useNotifications } from '../../contexts/NotificationContext'
+
+// ─── 상수 ───────────────────────────────────────────
+const WORKFLOW_STEPS = ['튜닝대기', '튜닝중', '튜닝완료', '반영대기', '반영완료']
+
+const STATUS_STEP: Record<WorkItem['status'], number> = {
+  pending: 0, tuning: 1, approval_pending: 2, apply_pending: 3, applied: 4,
+  scheduled: -1, failed: -1, rejected: -1, cancelled: -2, no_improve: -3,
+}
+
+const STATUS_LABELS: Record<WorkItem['status'], string> = {
+  scheduled: '예약중',
+  pending: '튜닝대기',
+  tuning: '튜닝중',
+  approval_pending: '튜닝완료',
+  apply_pending: '반영대기',
+  applied: '반영완료',
+  rejected: '반려',
+  failed: '실패',
+  cancelled: '취소',
+  no_improve: '개선없음',
+}
+
+const STATUS_BADGE_VARIANT: Record<WorkItem['status'], 'success' | 'danger' | 'warning' | 'neutral' | 'info'> = {
+  scheduled: 'neutral',
+  pending: 'neutral',
+  tuning: 'info',
+  approval_pending: 'warning',
+  apply_pending: 'info',
+  applied: 'success',
+  rejected: 'danger',
+  failed: 'danger',
+  cancelled: 'danger',
+  no_improve: 'neutral',
+}
+
+const ANALYSIS_STEPS = [
+  { key: 'sql_analysis', label: 'SQL 구조 분석' },
+  { key: 'plan_collection', label: '실행계획 수집' },
+  { key: 'plan_generation', label: '튜닝안 생성' },
+  { key: 'verification', label: '검증 실행' },
+] as const
+
+const TYPE_COLORS: Record<TuningType, { bg: string; text: string; label: string }> = {
+  index: { bg: 'bg-blue-100', text: 'text-blue-700', label: '인덱스' },
+  hint: { bg: 'bg-amber-100', text: 'text-amber-700', label: '힌트' },
+  rewrite: { bg: 'bg-green-100', text: 'text-green-700', label: '리라이트' },
+}
+
+// ─── 헬퍼 ───────────────────────────────────────────
+function formatNumber(n: number | null | undefined): string {
+  if (n == null) return '—'
+  return n.toLocaleString()
+}
+
+function formatMs(ms: number | null | undefined): string {
+  if (ms == null) return '—'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
+  return `${ms}ms`
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso)
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function formatDateFull(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function calcChangeRate(original: number | undefined, tuned: number | undefined): { rate: number | null; improved: boolean } {
+  if (original == null || tuned == null) return { rate: null, improved: false }
+  if (original === 0) return { rate: null, improved: false }
+  const rate = Math.round(((original - tuned) / original) * 100)
+  return { rate, improved: rate > 0 }
+}
+
+// ─── Applied 상태 트렌드 mock ────────────────────────
+function generateAppliedTrend(item: WorkItem) {
+  const applyDate = new Date(item.updatedAt)
+  const points: { time: string; elapsed: number; label: string }[] = []
+  const origBase = item.originalElapsed
+  const tunedBase = item.tunedElapsed ?? origBase * 0.2
+  for (let i = -7; i <= 7; i++) {
+    const d = new Date(applyDate)
+    d.setDate(d.getDate() + i)
+    const dayStr = `${d.getMonth() + 1}/${d.getDate()}`
+    const noise = 0.85 + 0.3 * Math.random()
+    const val = i < 0 ? Math.round(origBase * noise) : Math.round(tunedBase * noise)
+    points.push({ time: dayStr, elapsed: val, label: i === 0 ? '반영' : '' })
+  }
+  return { points, applyIndex: 7 }
+}
+
+// ─── WorkflowSteps ──────────────────────────────────
+function WorkflowSteps({ status }: { status: WorkItem['status'] }) {
+  const isSideStatus = status === 'rejected' || status === 'failed' || status === 'cancelled'
+  const currentStep = isSideStatus ? -1 : STATUS_STEP[status]
+
+  return (
+    <div className="flex items-center gap-1">
+      {WORKFLOW_STEPS.map((label, idx) => {
+        const isCompleted = !isSideStatus && idx < currentStep
+        const isCurrent = !isSideStatus && idx === currentStep
+        let circleClass = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 '
+        if (isCompleted) circleClass += 'bg-green-500 text-white'
+        else if (isCurrent) circleClass += 'bg-indigo-600 text-white'
+        else if (isSideStatus) circleClass += 'bg-slate-100 text-slate-300'
+        else circleClass += 'bg-slate-200 text-slate-500'
+
+        return (
+          <div key={idx} className="flex items-center gap-1">
+            {idx > 0 && (
+              <div className={`w-6 h-0.5 ${isCompleted ? 'bg-green-500' : isSideStatus ? 'bg-slate-100' : 'bg-slate-200'}`} />
+            )}
+            <div className="flex flex-col items-center gap-1">
+              <div className={circleClass}>
+                {isCompleted ? <CheckCircle2 size={14} /> : idx + 1}
+              </div>
+              <span className={`text-[10px] whitespace-nowrap ${isCurrent ? 'text-indigo-600 font-semibold' : isSideStatus ? 'text-slate-300' : 'text-slate-400'}`}>
+                {label}
+              </span>
+            </div>
+          </div>
+        )
+      })}
+      {isSideStatus && (
+        <div className="flex items-center gap-1 ml-2">
+          <div className={`w-6 h-0.5 ${status === 'rejected' ? 'bg-red-300' : 'bg-amber-300'}`} />
+          <div className="flex flex-col items-center gap-1">
+            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white ${status === 'rejected' ? 'bg-red-500' : 'bg-amber-500'}`}>
+              {status === 'rejected' ? <XCircle size={14} /> : <Undo2 size={14} />}
+            </div>
+            <span className={`text-[10px] font-semibold whitespace-nowrap ${status === 'rejected' ? 'text-red-600' : 'text-amber-600'}`}>
+              {status === 'rejected' ? '반려' : '재튜닝'}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── 섹션 토글 ──────────────────────────────────────
+function CollapsibleSection({ title, defaultOpen = true, children, icon, badge }: {
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+  icon?: React.ReactNode
+  badge?: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="border border-slate-200 rounded-lg bg-white overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {icon}
+          {title}
+          {badge}
+        </div>
+        {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+      </button>
+      {open && <div className="border-t border-slate-100 px-4 py-4">{children}</div>}
+    </div>
+  )
+}
+
+function ResizablePanel({ children, defaultHeight = 160, minHeight = 80, maxHeight = 600 }: {
+  children: React.ReactNode
+  defaultHeight?: number
+  minHeight?: number
+  maxHeight?: number
+}) {
+  const [height, setHeight] = useState(defaultHeight)
+  const dragging = useRef(false)
+  const startY = useRef(0)
+  const startH = useRef(0)
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragging.current = true
+    startY.current = e.clientY
+    startH.current = height
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const delta = ev.clientY - startY.current
+      setHeight(Math.max(minHeight, Math.min(maxHeight, startH.current + delta)))
+    }
+    const onMouseUp = () => {
+      dragging.current = false
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [height, minHeight, maxHeight])
+
+  return (
+    <div>
+      <div style={{ height }} className="overflow-auto">
+        {children}
+      </div>
+      <div
+        onMouseDown={onMouseDown}
+        className="h-4 flex items-center justify-center cursor-row-resize hover:bg-slate-100 rounded-b transition-colors group border-t border-dashed border-slate-200"
+        title="드래그하여 높이 조절"
+      >
+        <div className="flex items-center gap-1">
+          <div className="w-6 h-[3px] rounded-full bg-slate-300 group-hover:bg-slate-500 transition-colors" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── 줄 단위 diff 계산 ──────────────────────────────
+function computeLineDiff(left: string, right: string): { leftLines: DiffLine[], rightLines: DiffLine[] } {
+  const leftArr = left.split('\n')
+  const rightArr = right.split('\n')
+  const changes = diffArrays(leftArr, rightArr)
+
+  const leftLines: DiffLine[] = []
+  const rightLines: DiffLine[] = []
+  let leftNum = 1
+  let rightNum = 1
+
+  for (const part of changes) {
+    if (!part.added && !part.removed) {
+      for (const val of part.value) {
+        leftLines.push({ num: leftNum++, text: val, type: 'equal' })
+        rightLines.push({ num: rightNum++, text: val, type: 'equal' })
+      }
+    } else if (part.removed) {
+      for (const val of part.value) {
+        leftLines.push({ num: leftNum++, text: val, type: 'removed' })
+      }
+    } else if (part.added) {
+      for (const val of part.value) {
+        rightLines.push({ num: rightNum++, text: val, type: 'added' })
+      }
+    }
+  }
+  return { leftLines, rightLines }
+}
+
+// ─── 실행계획 diff (Operation ID 기준) ───────────────
+function computePlanDiff(left: string, right: string): { leftLines: DiffLine[], rightLines: DiffLine[] } {
+  const leftArr = left.split('\n')
+  const rightArr = right.split('\n')
+
+  const extractId = (line: string): string | null => {
+    const m = line.match(/\|\s*\*?\s*(\d+)\s*\|/)
+    return m ? m[1] : null
+  }
+
+  // Extract operation+name from a plan line (columns 1-2 after Id)
+  const extractOp = (line: string): string => {
+    const parts = line.split('|').filter(p => p !== '')
+    if (parts.length < 3) return ''
+    return (parts[1] || '').trim() + '|' + (parts[2] || '').trim()
+  }
+
+  const rightById = new Map<string, string>()
+  for (const line of rightArr) {
+    const id = extractId(line)
+    if (id) rightById.set(id, line)
+  }
+  const leftById = new Map<string, string>()
+  for (const line of leftArr) {
+    const id = extractId(line)
+    if (id) leftById.set(id, line)
+  }
+
+  const leftLines: DiffLine[] = leftArr.map((text, i) => {
+    const id = extractId(text)
+    if (!id) return { num: i + 1, text, type: 'equal' as const }
+    if (!rightById.has(id)) return { num: i + 1, text, type: 'removed' as const }
+    // Only highlight if operation or name changed (not just metrics)
+    if (extractOp(text) !== extractOp(rightById.get(id)!)) return { num: i + 1, text, type: 'modified' as const }
+    return { num: i + 1, text, type: 'equal' as const }
+  })
+
+  const rightLines: DiffLine[] = rightArr.map((text, i) => {
+    const id = extractId(text)
+    if (!id) return { num: i + 1, text, type: 'equal' as const }
+    if (!leftById.has(id)) return { num: i + 1, text, type: 'added' as const }
+    if (extractOp(text) !== extractOp(leftById.get(id)!)) return { num: i + 1, text, type: 'modified' as const }
+    return { num: i + 1, text, type: 'equal' as const }
+  })
+
+  return { leftLines, rightLines }
+}
+
+type DiffLine = { num: number; text: string; type: 'equal' | 'added' | 'removed' | 'modified' }
+
+const DIFF_STYLES: Record<DiffLine['type'], string> = {
+  equal: '',
+  added: 'bg-blue-50/60',
+  removed: 'bg-blue-50/60',
+  modified: 'bg-blue-50/60',
+}
+
+// ─── SQL 구문 하이라이팅 ─────────────────────────────
+const SQL_KEYWORDS = /\b(SELECT|FROM|WHERE|AND|OR|NOT|IN|EXISTS|BETWEEN|LIKE|IS|NULL|AS|ON|JOIN|LEFT|RIGHT|INNER|OUTER|CROSS|FULL|UNION|ALL|INSERT|INTO|UPDATE|SET|DELETE|CREATE|ALTER|DROP|TABLE|INDEX|VIEW|WITH|HAVING|GROUP\s+BY|ORDER\s+BY|PARTITION\s+BY|OVER|CASE|WHEN|THEN|ELSE|END|DISTINCT|TOP|LIMIT|OFFSET|FETCH|FIRST|NEXT|ROWS|ONLY|ASC|DESC|USING|VALUES|COUNT|SUM|AVG|MIN|MAX|ROUND|NVL|NVL2|DECODE|TO_CHAR|TO_DATE|TO_NUMBER|TRUNC|ADD_MONTHS|SYSDATE|ROWNUM|ROWID|SUBSTR|INSTR|LENGTH|REPLACE|TRIM|UPPER|LOWER|COALESCE|NULLIF|CAST|EXTRACT|RANK|DENSE_RANK|ROW_NUMBER|LAG|LEAD|LISTAGG|RATIO_TO_REPORT)\b/gi
+const SQL_STRINGS = /('[^']*')/g
+const SQL_NUMBERS = /\b(\d+\.?\d*)\b/g
+const SQL_COMMENTS = /(--.*$|\/\*[\s\S]*?\*\/)/gm
+const SQL_HINTS = /(\/\*\+[\s\S]*?\*\/)/g
+
+
+// ─── SQL 포맷팅 헬퍼 ─────────────────────────────────
+function formatSQL(sql: string): string {
+  try {
+    // Oracle 힌트(/*+ ... */)를 보존하기 위해 임시 치환 후 복원
+    const hints: string[] = []
+    const preserved = sql.replace(/\/\*\+[\s\S]*?\*\//g, (m) => {
+      hints.push(m)
+      return `__HINT_${hints.length - 1}__`
+    })
+    let result = sqlFormat(preserved, {
+      language: 'plsql',
+      tabWidth: 2,
+      keywordCase: 'upper',
+      linesBetweenQueries: 1,
+    })
+    // 힌트 복원
+    hints.forEach((h, i) => {
+      result = result.replace(`__HINT_${i}__`, h)
+    })
+    return result
+  } catch {
+    return sql
+  }
+}
+
+// ─── 실행계획 테이블 파싱 & 렌더링 ─────────────────────
+type PlanRow = { id: string; starred: boolean; cells: string[] }
+type PredicateEntry = { id: string; type: 'access' | 'filter'; text: string }
+type ParsedPlan = { preLines: string[]; headers: string[]; rows: PlanRow[]; predicates: PredicateEntry[]; postLines: string[] }
+
+function parsePlanText(text: string): ParsedPlan {
+  const lines = text.split('\n')
+  const preLines: string[] = []
+  const postLines: string[] = []
+  const headers: string[] = []
+  const rows: PlanRow[] = []
+  const predicates: PredicateEntry[] = []
+  let phase: 'pre' | 'header' | 'data' | 'post' | 'predicate' = 'pre'
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li]
+
+    if (/^Predicate Information/i.test(line.trim())) {
+      phase = 'predicate'
+      continue
+    }
+
+    if (phase === 'predicate') {
+      if (/^-+$/.test(line.trim())) continue
+      const m = line.match(/^\s*(\d+)\s*-\s*(access|filter)\s*\((.+)\)\s*$/)
+      if (m) {
+        predicates.push({ id: m[1], type: m[2] as 'access' | 'filter', text: m[3] })
+      } else if (line.trim() && predicates.length > 0 && /^\s{10,}/.test(line)) {
+        predicates[predicates.length - 1].text += ' ' + line.trim()
+      }
+      continue
+    }
+
+    if (phase === 'pre') {
+      if (/^\|\s*Id\s*\|/.test(line)) {
+        const parts = line.split('|').filter(p => p.trim() !== '')
+        headers.push(...parts.map(p => p.trim()))
+        phase = 'header'
+      } else if (/^-+$/.test(line)) {
+        // separator before header, skip
+      } else {
+        preLines.push(line)
+      }
+    } else if (phase === 'header') {
+      if (/^-+$/.test(line)) {
+        phase = 'data'
+      } else if (/^\|/.test(line)) {
+        phase = 'data'
+        const parts = line.split('|').filter(p => p !== '')
+        const idRaw = parts[0] || ''
+        const starred = idRaw.includes('*')
+        const cells = parts.map((p, ci) => ci === 1 ? p.replace(/\s+$/, '') : p.trim())
+        rows.push({ id: cells[0]?.replace('*', '').trim() || '', starred, cells })
+      }
+    } else if (phase === 'data') {
+      if (/^-+$/.test(line)) {
+        phase = 'post'
+      } else if (/^\|/.test(line)) {
+        const parts = line.split('|').filter(p => p !== '')
+        const idRaw = parts[0] || ''
+        const starred = idRaw.includes('*')
+        const cells = parts.map((p, ci) => ci === 1 ? p.replace(/\s+$/, '') : p.trim())
+        rows.push({ id: cells[0]?.replace('*', '').trim() || '', starred, cells })
+      }
+    } else {
+      postLines.push(line)
+    }
+  }
+  return { preLines, headers, rows, predicates, postLines }
+}
+
+function PlanTable({ text, highlightOps }: {
+  text: string
+  highlightOps?: Record<string, string>
+}) {
+  const parsed = useMemo(() => parsePlanText(text), [text])
+  const defaultHighlight: Record<string, string> = {
+    'TABLE ACCESS FULL': 'bg-amber-50 text-amber-700',
+    'INDEX FULL SCAN': 'bg-amber-50 text-amber-700',
+    'INDEX RANGE SCAN': 'bg-amber-50 text-amber-700',
+    'INDEX UNIQUE SCAN': 'bg-amber-50 text-amber-700',
+    ...highlightOps,
+  }
+
+  const getRowHighlight = (row: PlanRow) => {
+    const op = row.cells[1] || ''
+    for (const [keyword, cls] of Object.entries(defaultHighlight)) {
+      if (op.includes(keyword)) return cls
+    }
+    return ''
+  }
+
+  return (
+    <div className="text-xs font-mono">
+      {parsed.preLines.filter(l => l.trim()).length > 0 && (
+        <div className="text-slate-500 mb-2 leading-relaxed">
+          {parsed.preLines.map((l, i) => <div key={i}>{l}</div>)}
+        </div>
+      )}
+      {parsed.headers.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="border-collapse w-full min-w-max">
+            <thead>
+              <tr className="border-b border-slate-300 bg-slate-100">
+                {parsed.headers.map((h, i) => (
+                  <th key={i} className="px-2 py-1 text-left text-[10px] font-semibold text-slate-600 whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {parsed.rows.map((row, ri) => {
+                const hl = getRowHighlight(row)
+                return (
+                  <tr key={ri} className={`border-b border-slate-100 ${hl} hover:bg-slate-50/50`}>
+                    {parsed.headers.map((_, ci) => {
+                      const val = row.cells[ci] || ''
+                      const isOp = ci === 1
+                      return (
+                        <td key={ci} className={`px-2 py-0.5 whitespace-pre ${ci === 0 ? 'text-right text-slate-500 w-8' : ''} ${isOp ? 'text-slate-800' : 'text-slate-600'}`}>
+                          {ci === 0 ? (row.starred ? `*${val}` : val) : val}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {parsed.predicates.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-slate-200">
+          <div className="text-[10px] font-semibold text-slate-500 mb-1.5">Predicate Information (identified by operation id):</div>
+          <div className="space-y-0.5">
+            {parsed.predicates.map((p, i) => (
+              <div key={i} className="flex gap-1.5 text-[11px] leading-relaxed">
+                <span className="shrink-0 text-slate-500 font-medium w-6 text-right">{p.id}</span>
+                <span className="shrink-0 text-slate-400">-</span>
+                <span className={`shrink-0 font-medium ${p.type === 'access' ? 'text-blue-600' : 'text-amber-600'}`}>{p.type}</span>
+                <span className="text-slate-600 break-all">({p.text})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Diff용 실행계획 테이블 렌더링 ──────────────────────
+function PlanDiffTable({ lines }: {
+  lines: DiffLine[]
+}) {
+  const parsed = useMemo(() => {
+    const preLines: (DiffLine & { isTable: false })[] = []
+    const headerCols: string[] = []
+    const tableLines: (DiffLine & { isTable: true; cells: string[] })[] = []
+    const predicateLines: DiffLine[] = []
+    let foundHeader = false
+    let inTable = false
+    let inPredicate = false
+
+    for (const line of lines) {
+      if (/^Predicate Information/i.test(line.text.trim())) {
+        inPredicate = true
+        inTable = false
+        continue
+      }
+      if (inPredicate) {
+        if (/^-+$/.test(line.text.trim())) continue
+        if (line.text.trim()) predicateLines.push(line)
+        continue
+      }
+      if (!foundHeader && /^\|\s*Id\s*\|/.test(line.text)) {
+        const parts = line.text.split('|').filter(p => p.trim() !== '')
+        headerCols.push(...parts.map(p => p.trim()))
+        foundHeader = true
+        inTable = true
+        continue
+      }
+      if (inTable && /^-+$/.test(line.text)) continue
+      if (inTable && /^\|/.test(line.text)) {
+        const parts = line.text.split('|').filter(p => p !== '')
+        tableLines.push({ ...line, isTable: true, cells: parts.map((p, ci) => ci === 1 ? p.replace(/\s+$/, '') : p.trim()) })
+      } else if (!foundHeader) {
+        preLines.push({ ...line, isTable: false })
+      }
+    }
+    return { preLines, headerCols, tableLines, predicateLines }
+  }, [lines])
+
+  const diffColor: Record<DiffLine['type'], string> = {
+    equal: '',
+    added: 'bg-blue-50/60',
+    removed: 'bg-blue-50/60',
+    modified: 'bg-blue-50/60',
+  }
+  const diffTextColor: Record<DiffLine['type'], string> = {
+    equal: '',
+    added: 'text-blue-800',
+    removed: 'text-blue-800',
+    modified: 'text-blue-800',
+  }
+
+  return (
+    <div className="text-xs font-mono">
+      {parsed.preLines.map((line, i) => (
+        <div key={i} className={`px-1 ${diffColor[line.type]} ${diffTextColor[line.type]} rounded-sm`}>
+          {line.text}
+        </div>
+      ))}
+      {parsed.headerCols.length > 0 && (
+        <div className="overflow-x-auto mt-1">
+          <table className="border-collapse w-full min-w-max">
+            <thead>
+              <tr className="border-b border-slate-300 bg-slate-100">
+                {parsed.headerCols.map((h, i) => (
+                  <th key={i} className="px-2 py-0.5 text-left text-[10px] font-semibold text-slate-600 whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {parsed.tableLines.map((row, ri) => (
+                <tr key={ri} className={`border-b border-slate-100 ${diffColor[row.type]} ${diffTextColor[row.type]}`}>
+                  {parsed.headerCols.map((_, ci) => (
+                    <td key={ci} className={`px-2 py-0.5 whitespace-pre ${ci === 0 ? 'text-right w-8' : ''}`}>
+                      {row.cells[ci] || ''}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {parsed.predicateLines.length > 0 && (
+        <div className="mt-2 pt-1.5 border-t border-slate-200">
+          <div className="text-[9px] font-semibold text-slate-400 mb-1">Predicate Information:</div>
+          {parsed.predicateLines.map((line, i) => (
+            <div key={i} className={`text-[10px] leading-relaxed px-1 rounded-sm ${diffColor[line.type]} ${diffTextColor[line.type]}`}>
+              {line.text}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── 전체화면 비교 모달 ──────────────────────────────
+function FullscreenCompare({ left, right, leftLabel, rightLabel, onClose, mode }: {
+  left: string
+  right: string
+  leftLabel: string
+  rightLabel: string
+  onClose: () => void
+  mode: 'sql' | 'plan'
+}) {
+  const { colTerm: __ctxColTerm } = useObjectInfo()
+
+  const [formatted, setFormatted] = useState(false)
+
+  useEscStack(true, onClose)
+
+  const displayLeft = useMemo(() => formatted && mode === 'sql' ? formatSQL(left) : left, [left, formatted, mode])
+  const displayRight = useMemo(() => formatted && mode === 'sql' ? formatSQL(right) : right, [right, formatted, mode])
+
+  const { leftLines, rightLines } = useMemo(
+    () => mode === 'plan' ? computePlanDiff(displayLeft, displayRight) : computeLineDiff(displayLeft, displayRight),
+    [displayLeft, displayRight, mode]
+  )
+
+  const leftChanged = leftLines.filter(l => l.type !== 'equal').length
+  const rightChanged = rightLines.filter(l => l.type !== 'equal').length
+
+  const renderLines = (lines: DiffLine[]) => (
+    <div className="font-mono text-[13px] leading-[1.6]">
+      {lines.map((line, i) => (
+        <div key={i} className={`flex ${DIFF_STYLES[line.type]} px-1 -mx-1 rounded-sm`}>
+          <span className="shrink-0 w-9 text-right pr-2.5 text-slate-400 text-[11px] select-none tabular-nums leading-[1.6]">{line.num}</span>
+          <span className={`flex-1 whitespace-pre-wrap ${line.type !== 'equal' ? 'text-blue-800' : ''}`}>
+            {mode === 'sql' ? highlightSQL(line.text, __ctxColTerm) : line.text}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-white" onClick={onClose}>
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-slate-50 shrink-0">
+          <div className="flex items-center gap-6">
+            <span className="text-xs font-semibold text-slate-600">{leftLabel}</span>
+            <span className="text-xs font-semibold text-slate-600">{rightLabel}</span>
+            {(leftChanged + rightChanged) > 0 && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{Math.max(leftChanged, rightChanged)}건 변경</span>}
+          </div>
+          <div className="flex items-center gap-3">
+            {mode === 'sql' && (
+              <button
+                onClick={() => setFormatted(f => !f)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${formatted ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                <FileText size={12} />
+                {formatted ? 'Format ON' : 'Format'}
+              </button>
+            )}
+            <div className="flex items-center gap-2 text-[10px] text-slate-400">
+              <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-blue-400 rounded" />변경됨</span>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded hover:bg-slate-100">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 grid grid-cols-2 min-h-0">
+          <div className="border-r border-slate-200 flex flex-col min-h-0">
+            <div className="px-3 py-1 border-b border-slate-100 bg-slate-50">
+              <span className="text-[10px] font-semibold text-slate-600">AS-IS</span>
+            </div>
+            <div className="flex-1 overflow-y-scroll p-4">
+              {mode === 'plan' ? <PlanDiffTable lines={leftLines} /> : renderLines(leftLines)}
+            </div>
+          </div>
+          <div className="flex flex-col min-h-0">
+            <div className="px-3 py-1 border-b border-slate-100 bg-slate-50">
+              <span className="text-[10px] font-semibold text-slate-600">TO-BE</span>
+            </div>
+            <div className="flex-1 overflow-y-scroll p-4">
+              {mode === 'plan' ? <PlanDiffTable lines={rightLines} /> : renderLines(rightLines)}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── 전체 비교 모달 (SQL + 실행계획 2x2) ─────────────
+function FullscreenCompareAll({ sqlLeft, sqlRight, planLeft, planRight, onClose }: {
+  sqlLeft: string
+  sqlRight: string
+  planLeft: string
+  planRight: string
+  onClose: () => void
+}) {
+  const { colTerm: __ctxColTerm } = useObjectInfo()
+
+  const [formatted, setFormatted] = useState(false)
+  const [activeTab, setActiveTab] = useState<'sql' | 'plan' | 'both'>('both')
+
+  useEscStack(true, onClose)
+
+  const fmtSqlLeft = useMemo(() => formatted ? formatSQL(sqlLeft) : sqlLeft, [sqlLeft, formatted])
+  const fmtSqlRight = useMemo(() => formatted ? formatSQL(sqlRight) : sqlRight, [sqlRight, formatted])
+
+  const sqlDiff = useMemo(() => computeLineDiff(fmtSqlLeft, fmtSqlRight), [fmtSqlLeft, fmtSqlRight])
+  const planDiff = useMemo(() => computePlanDiff(planLeft, planRight), [planLeft, planRight])
+
+  const renderLines = (lines: DiffLine[], highlight: boolean) => (
+    <div className="font-mono text-[12px] leading-[1.5]">
+      {lines.map((line, i) => (
+        <div key={i} className={`flex ${DIFF_STYLES[line.type]} px-1 -mx-1 rounded-sm`}>
+          <span className="shrink-0 w-8 text-right pr-2 text-slate-400 text-[10px] select-none tabular-nums leading-[1.5]">{line.num}</span>
+          <span className={`flex-1 whitespace-pre-wrap ${line.type !== 'equal' ? 'text-blue-800' : ''}`}>
+            {highlight ? highlightSQL(line.text, __ctxColTerm) : line.text}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+
+  const renderPanel = (label: string, side: 'left' | 'right', lines: DiffLine[], highlight: boolean) => (
+    <div className={`flex flex-col bg-white overflow-hidden min-h-0 ${side === 'left' ? 'border-r border-slate-200' : ''}`}>
+      <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+        <span className="text-[10px] font-semibold text-slate-600">{label}</span>
+        <span className="text-[10px] text-slate-400 ml-auto">{lines.length} lines</span>
+      </div>
+      <div className="flex-1 overflow-y-scroll p-3">
+        {!highlight ? <PlanDiffTable lines={lines} /> : renderLines(lines, highlight)}
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-white" onClick={onClose}>
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 shrink-0">
+          <div className="flex items-center gap-1">
+            {(['both', 'sql', 'plan'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${activeTab === tab ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+              >
+                {tab === 'both' ? '전체' : tab === 'sql' ? 'SQL' : '실행계획'}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            {(activeTab === 'sql' || activeTab === 'both') && (
+              <button
+                onClick={() => setFormatted(f => !f)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${formatted ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                <FileText size={12} />
+                {formatted ? 'Format ON' : 'Format'}
+              </button>
+            )}
+            <div className="flex items-center gap-2 text-[10px] text-slate-400">
+              <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-blue-400 rounded" />변경됨</span>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded hover:bg-slate-100">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {activeTab === 'both' && (
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex flex-col border-b border-slate-200" style={{ flex: '4 1 0%', minHeight: 0, overflow: 'hidden' }}>
+              <div className="text-[10px] font-semibold text-slate-400 uppercase px-3 py-1 bg-slate-50 border-b border-slate-100 shrink-0">SQL 비교</div>
+              <div className="flex-1 grid grid-cols-2 overflow-hidden" style={{ minHeight: 0 }}>
+                {renderPanel('AS-IS', 'left', sqlDiff.leftLines, true)}
+                {renderPanel('TO-BE', 'right', sqlDiff.rightLines, true)}
+              </div>
+            </div>
+            <div className="flex flex-col" style={{ flex: '6 1 0%', minHeight: 0, overflow: 'hidden' }}>
+              <div className="text-[10px] font-semibold text-slate-400 uppercase px-3 py-1 bg-slate-50 border-b border-slate-100 shrink-0">실행계획 비교</div>
+              <div className="flex-1 grid grid-cols-2 overflow-hidden" style={{ minHeight: 0 }}>
+                {renderPanel('AS-IS', 'left', planDiff.leftLines, false)}
+                {renderPanel('TO-BE', 'right', planDiff.rightLines, false)}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'sql' && (
+          <div className="flex-1 grid grid-cols-2 min-h-0">
+            {renderPanel('AS-IS', 'left', sqlDiff.leftLines, true)}
+            {renderPanel('TO-BE', 'right', sqlDiff.rightLines, true)}
+          </div>
+        )}
+
+        {activeTab === 'plan' && (
+          <div className="flex-1 grid grid-cols-2 min-h-0">
+            {renderPanel('AS-IS', 'left', planDiff.leftLines, false)}
+            {renderPanel('TO-BE', 'right', planDiff.rightLines, false)}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── 메트릭 비교 카드 ────────────────────────────────
+function MetricCompareCard({ label, original, tuned, unit, better }: {
+  label: string; original: number; tuned: number | undefined; unit?: string; better: 'lower' | 'higher'
+}) {
+  const hasAfter = tuned != null
+  const improved = hasAfter && (better === 'lower' ? tuned < original : tuned > original)
+  const rate = hasAfter && original > 0 ? Math.round(((original - tuned) / original) * 100) : null
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg p-3">
+      <div className="text-xs text-slate-500 mb-2">{label}</div>
+      <div className="flex items-end gap-2">
+        <div>
+          <div className="text-[10px] text-slate-400">Before</div>
+          <div className="text-sm font-mono text-slate-600">{unit === 'ms' ? formatMs(original) : formatNumber(original)}</div>
+        </div>
+        <div className="text-slate-300 text-sm pb-0.5">→</div>
+        <div>
+          <div className="text-[10px] text-slate-400">After</div>
+          <div className={`text-sm font-mono font-semibold ${!hasAfter ? 'text-slate-400' : improved ? 'text-green-600' : 'text-red-600'}`}>
+            {!hasAfter ? '—' : unit === 'ms' ? formatMs(tuned) : formatNumber(tuned)}
+          </div>
+        </div>
+        {rate !== null && rate !== 0 && (
+          <span className={`text-xs ml-auto px-1.5 py-0.5 rounded ${improved ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            {improved ? '↓' : '↑'}{Math.abs(rate)}%
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── 튜닝 유형 배지들 ───────────────────────────────
+function TypeBadges({ types }: { types: TuningType[] }) {
+  return (
+    <div className="flex gap-1">
+      {types.map(t => (
+        <span key={t} className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${TYPE_COLORS[t].bg} ${TYPE_COLORS[t].text}`}>
+          {TYPE_COLORS[t].label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+
+// ═══════════════════════════════════════════════════════
+// ─── 메인 컴포넌트 ───────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// ─── 네비게이션 컨텍스트 필터 ────────────────────────
+function getFilteredItems(context: string | null): WorkItem[] {
+  switch (context) {
+    case 'auto_today':
+      return workItems.filter(w => w.selectionSource === 'auto')
+    case 'tuned_review':
+      return workItems.filter(w => w.status === 'approval_pending')
+    case 'all':
+    default:
+      return workItems
+  }
+}
+
+const CONTEXT_LABELS: Record<string, string> = {
+  auto_today: '야간 자동튜닝',
+  tuned_review: '튜닝완료 검토',
+  all: '전체 작업',
+}
+
+// ─── 단축키 도움말 오버레이 ────────────────────────
+function ShortcutHelpOverlay({ onClose }: { onClose: () => void }) {
+  const shortcuts = [
+    { keys: '← →', desc: '이전/다음 작업' },
+    { keys: 'Enter', desc: '확인 다이얼로그 확인' },
+    { keys: 'Esc', desc: '다이얼로그 닫기' },
+    { keys: '?', desc: '단축키 도움말 토글' },
+  ]
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-[320px] overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+          <span className="text-sm font-semibold text-slate-900">키보드 단축키</span>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+        </div>
+        <div className="px-5 py-4 space-y-2">
+          {shortcuts.map(s => (
+            <div key={s.keys} className="flex items-center justify-between text-sm">
+              <span className="text-slate-600">{s.desc}</span>
+              <kbd className="px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-xs font-mono text-slate-700">{s.keys}</kbd>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 팝업(새 탭) 모드 — WorkbenchContent를 풀스크린으로 렌더 */
+function PopupWorkbench({ item, filteredItems, onItemSelect }: {
+  item: WorkItem
+  filteredItems: WorkItem[]
+  onItemSelect: (item: WorkItem) => void
+}) {
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, WorkItem['status']>>({})
+  const [confirmAction, setConfirmAction] = useState<{ title: string; variant: 'warning' | 'danger'; message: string; onConfirm: () => void } | null>(null)
+  const [toast, setToast] = useState('')
+
+  const getStatus = useCallback((it: WorkItem) => statusOverrides[it.id] ?? it.status, [statusOverrides])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 2500)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  return (
+    <div className="h-[calc(100vh-2rem)]">
+      <WorkbenchContent
+        item={item}
+        filteredItems={filteredItems}
+        getStatus={getStatus}
+        onItemSelect={onItemSelect}
+        onClose={() => window.close()}
+        onStatusChange={(id, s) => setStatusOverrides(prev => ({ ...prev, [id]: s }))}
+        onReject={() => {}}
+        onShowToast={setToast}
+        onConfirmAction={setConfirmAction}
+        onDirectInputCreated={() => {}}
+        onNavigateToExisting={(id) => onItemSelect(workItems.find(w => w.id === id) ?? item)}
+      />
+      {confirmAction && (
+        <ConfirmDialog
+          open
+          title={confirmAction.title}
+          variant={confirmAction.variant}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={confirmAction.onConfirm}
+        >
+          {confirmAction.message}
+        </ConfirmDialog>
+      )}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] bg-action text-white px-4 py-2 rounded-lg shadow-lg text-sm animate-in fade-in slide-in-from-bottom-4">
+          {toast}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function WorkDetail() {
+  const { colTerm: __ctxColTerm } = useObjectInfo()
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const { addNotification } = useNotifications()
+
+  // [F-3] backend tuning_requests 단건 fetch (id가 'BE-{n}' 형태)
+  const [backendItem, setBackendItem] = useState<WorkItem | null>(null)
+  useEffect(() => {
+    if (!id) return
+    const m = id.match(/^BE-(\d+)$/)
+    if (!m) return
+    const reqId = parseInt(m[1], 10)
+    fetchTuningRequest(reqId).then((d: TuningRequestDetail) => {
+      const before = d.performance?.find(p => p.phase === 'before') as TuningRequestDetailPerf | undefined
+      const after = d.performance?.find(p => p.phase === 'applied') ?? d.performance?.find(p => p.phase === 'after') as TuningRequestDetailPerf | undefined
+      const beforePlan = trimPlanHeader(d.plans?.find(p => p.phase === 'before')?.plan_text)
+      const afterPlan = trimPlanHeader(d.plans?.find(p => p.phase === 'applied')?.plan_text ?? d.plans?.find(p => p.phase === 'after')?.plan_text)
+      const isNoImprove = (d.rationale ?? '').includes('[no_improve]')
+      const status: WorkItem['status'] = (() => {
+        switch (d.status) {
+          case 'requested': case 'tuning': return 'tuning'
+          case 'completed': return 'approval_pending'
+          case 'approved': return 'apply_pending'
+          case 'applied': return 'applied'
+          case 'rejected': return 'rejected'
+          case 'failed': return isNoImprove ? 'no_improve' : 'failed'
+          default: return 'pending'
+        }
+      })()
+      setBackendItem({
+        id: `BE-${d.id}`,
+        sqlId: `BE-${d.id}`,
+        sqlText: d.source_sql_text ?? '',
+        status,
+        type: 'tuning',
+        createdAt: d.requested_at ?? '',
+        updatedAt: d.completed_at ?? d.requested_at ?? '',
+        assignee: 'AI',
+        instanceName: '-',
+        schemaName: d.schema_name ?? '',
+        workName: d.source_sql_text ? d.source_sql_text.slice(0, 60) : `튜닝 요청 #${d.id}`,
+        selectionSource: 'manual',
+        source: 'v$sql',
+        originalElapsed: before?.elapsed_time_sec != null ? Math.round(before.elapsed_time_sec * 1000) : undefined,
+        originalBuffers: before?.buffer_gets_count ?? undefined,
+        tunedElapsed: after && after.elapsed_time_sec != null ? Math.round(after.elapsed_time_sec * 1000) : undefined,
+        tunedBuffers: after?.buffer_gets_count ?? undefined,
+        improvementRate: d.improvement_pct != null ? Math.round(d.improvement_pct * 100) : undefined,
+        originalPlanText: beforePlan,
+        batchId: '',
+      })
+      // workRecommendations 매핑 — WorkbenchContent 가 사용
+      if (d.tuned_sql_text) {
+        // dynamic import 회피 — 직접 require 대신 setBackendItem 후 별도 effect 에서 처리하지 않고 inline 매핑
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const recMod = (window as unknown as { __workRecCache?: Record<string, unknown> })
+          recMod.__workRecCache = recMod.__workRecCache ?? {}
+        } catch { /* noop */ }
+      }
+    }).catch(err => console.error('[WorkDetail fetchTuningRequest failed]', err))
+  }, [id])
+
+  const item = useMemo<WorkItem | undefined>(
+    () => backendItem ?? workItems.find(w => w.id === id),
+    [id, backendItem]
+  )
+
+  // 네비게이션 컨텍스트 (목록에서 전달)
+  const context = searchParams.get('context')
+  const fromPath = searchParams.get('from') || '/work'
+  const isPopup = searchParams.get('popup') === 'true'
+
+  // 컨텍스트 기반 필터된 목록에서 이전/다음 네비게이션
+  const filteredItems = useMemo(() => getFilteredItems(context), [context])
+  const currentIdx = useMemo(() => filteredItems.findIndex(w => w.id === id), [id, filteredItems])
+  const prevItem = currentIdx > 0 ? filteredItems[currentIdx - 1] : null
+  const nextItem = currentIdx < filteredItems.length - 1 ? filteredItems[currentIdx + 1] : null
+  const contextQuery = context ? `?context=${context}&from=${encodeURIComponent(fromPath)}` : (fromPath !== '/work' ? `?from=${encodeURIComponent(fromPath)}` : '')
+  const goTo = useCallback((targetId: string) => navigate(`/work/${targetId}${contextQuery}`), [navigate, contextQuery])
+
+  // 시뮬레이션용 상태
+  const [status, setStatus] = useState<WorkItem['status']>(item?.status ?? 'pending')
+  const [tuningInProgress, setTuningInProgress] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<null | {
+    action: string; title: string; message: string; variant: 'danger' | 'warning'
+    onConfirm: () => void
+  }>(null)
+
+  // 모달 상태
+  const [showRetuneModal, setShowRetuneModal] = useState(false)
+  const [showRejectModal, setShowRejectModal] = useState(false)
+  const [showDeliveryModal, setShowDeliveryModal] = useState<number | null>(null) // actionItem id
+  const [retuneConditions, setRetuneConditions] = useState<string[]>([])
+  const [retuneReason, setRetuneReason] = useState('')
+  const [rejectReason, setRejectReason] = useState('')
+  const [deliveryMethod, setDeliveryMethod] = useState<string>('email')
+  const [deliveryRecipient, setDeliveryRecipient] = useState('')
+  const [showShortcutHelp, setShowShortcutHelp] = useState(false)
+
+  // 튜닝안 선택
+  const recommendation = id ? workRecommendations[id] : undefined
+  const [selectedPlanId, setSelectedPlanId] = useState(recommendation?.selectedPlanId ?? '')
+  const selectedPlan = recommendation?.plans.find(p => p.id === selectedPlanId) ?? recommendation?.plans[0]
+  const [sqlModalOpen, setSqlModalOpen] = useState(false)
+  useEscStack(sqlModalOpen, useCallback(() => setSqlModalOpen(false), []))
+
+  // 액션 항목
+  const [actionItems, setActionItems] = useState<ActionItem[]>(id ? (workActionItems[id] ?? []) : [])
+
+  // tuning 자동 전환 시뮬레이션
+  useEffect(() => {
+    if (status === 'tuning' && tuningInProgress) {
+      const timer = setTimeout(() => {
+        setStatus('approval_pending')
+        setTuningInProgress(false)
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [status, tuningInProgress])
+
+  // 바인드 데이터
+  const bindInfo: WorkBindInfo | undefined = id ? workBinds[id] : undefined
+
+  // applied 트렌드
+  const appliedTrend = useMemo(() => {
+    if (!item || status !== 'applied') return null
+    return generateAppliedTrend(item)
+  }, [item, status])
+
+  if (!item) {
+    return (
+      <div className="p-6">
+        <div className="text-slate-500">작업을 찾을 수 없습니다. (ID: {id})</div>
+        <Button variant="ghost" size="sm" className="mt-4" onClick={() => navigate('/work')}>
+          <ArrowLeft size={14} className="mr-1" /> 목록으로
+        </Button>
+      </div>
+    )
+  }
+
+  // ─── 팝업(새 탭) 모드: WorkbenchContent 사용 ──────────
+  if (isPopup) {
+    return (
+      <PopupWorkbench
+        item={item}
+        filteredItems={filteredItems}
+        onItemSelect={(it) => navigate(`/work/${it.id}?popup=true`)}
+      />
+    )
+  }
+
+  // ─── 상태 전환 핸들러 ──────────────────────────────
+  const handleVerify = () => {
+    setConfirmAction({
+      action: 'verify', title: '확인',
+      message: `선택된 튜닝안을 확인 처리하시겠습니까?\n확인 후 반영대기로 전환되며, 액션 항목별 반영/전달을 진행합니다.`,
+      variant: 'warning',
+      onConfirm: () => {
+        setStatus('apply_pending')
+        // 선택된 플랜에서 액션 항목 자동 생성
+        if (selectedPlan) {
+          const newItems: ActionItem[] = []
+          let idx = 1
+          if (selectedPlan.types.includes('index')) {
+            newItems.push({
+              id: idx++, workItemId: item.id,
+              label: `인덱스 생성: ${selectedPlan.indexDdl?.match(/(\w+)\s+ON/)?.[1] ?? 'NEW_IDX'}`,
+              type: 'auto_apply', status: 'pending',
+              ddl: selectedPlan.indexDdl, scheduledTime: '22:00~06:00',
+              detail: selectedPlan.indexDdl,
+            })
+          }
+          if (selectedPlan.types.includes('hint')) {
+            newItems.push({
+              id: idx++, workItemId: item.id,
+              label: '힌트 변경 권고', type: 'recommendation', status: 'pending',
+              detail: '힌트 변경 사항을 개발팀에 전달',
+            })
+          }
+          if (selectedPlan.types.includes('rewrite')) {
+            newItems.push({
+              id: idx++, workItemId: item.id,
+              label: '리라이트 권고', type: 'recommendation', status: 'pending',
+              detail: 'SQL 리라이트 사항을 개발팀에 전달',
+            })
+          }
+          setActionItems(newItems)
+        }
+        setConfirmAction(null)
+      },
+    })
+  }
+
+  const handleTuningImpossible = () => {
+    setShowRejectModal(true)
+  }
+
+  const confirmTuningImpossible = () => {
+    if (item) {
+      addHistoryEvent(item.id, {
+        timestamp: new Date().toISOString(),
+        type: 'rejected',
+        actor: '나',
+        reason: rejectReason.trim(),
+      })
+    }
+    setStatus('rejected')
+    setShowRejectModal(false)
+    setRejectReason('')
+  }
+
+  const handleRequestRetune = () => {
+    setShowRetuneModal(true)
+  }
+
+  const confirmRetune = () => {
+    setStatus('pending')
+    setShowRetuneModal(false)
+    setRetuneConditions([])
+    setRetuneReason('')
+  }
+
+  const handleCancelTuning = () => {
+    setConfirmAction({
+      action: 'cancel', title: '분석 중단',
+      message: '진행중인 AI 분석을 중단하시겠습니까?',
+      variant: 'danger',
+      onConfirm: () => {
+        setStatus('pending')
+        setTuningInProgress(false)
+        setConfirmAction(null)
+      },
+    })
+  }
+
+  const handleDeliverAction = (actionId: number) => {
+    setShowDeliveryModal(actionId)
+    setDeliveryMethod('email')
+    setDeliveryRecipient('')
+  }
+
+  const confirmDelivery = () => {
+    if (showDeliveryModal === null) return
+    setActionItems(prev => prev.map(ai =>
+      ai.id === showDeliveryModal
+        ? { ...ai, status: 'delivered' as const, deliveryMethod: deliveryMethod as ActionItem['deliveryMethod'], deliveredAt: new Date().toISOString(), deliveredTo: deliveryRecipient }
+        : ai
+    ))
+    setShowDeliveryModal(null)
+  }
+
+  const handleAutoApply = (actionId: number) => {
+    // 자동 적용 시뮬레이션: pending → running → completed
+    setActionItems(prev => prev.map(ai =>
+      ai.id === actionId ? { ...ai, status: 'running' as const } : ai
+    ))
+    setTimeout(() => {
+      setActionItems(prev => prev.map(ai =>
+        ai.id === actionId ? { ...ai, status: 'completed' as const, completedAt: new Date().toISOString() } : ai
+      ))
+    }, 2000)
+  }
+
+  // 모든 액션 완료 체크
+  const allActionsComplete = actionItems.length > 0 && actionItems.every(ai =>
+    ai.status === 'completed' || ai.status === 'applied' || ai.status === 'delivered' || ai.status === 'dev_confirmed'
+  )
+
+  const handleTransitionToApplied = () => {
+    setConfirmAction({
+      action: 'apply', title: '반영완료로 전환',
+      message: '모든 액션 항목이 처리되었습니다. 반영완료 상태로 전환하시겠습니까?',
+      variant: 'warning',
+      onConfirm: () => {
+        setStatus('applied')
+        setConfirmAction(null)
+        // Mock PoC: 적용 완료 알림 push — 90% 성공 / 10% 실패
+        if (item) {
+          const isFail = Math.random() < 0.1
+          const instanceType = item.instanceName?.includes('검증') ? 'dev' : 'production'
+          const applyObjects = actionItems
+            .filter(ai => ai.type === 'auto_apply' && ai.label)
+            .map(ai => ai.label)
+          if (isFail) {
+            addNotification({
+              type: 'apply_failure',
+              instance: item.instanceName,
+              instanceType,
+              requestLabel: item.workName ?? '튜닝 작업',
+              sqlText: item.sqlText,
+              applyErrorMsg: 'ORA-01031: insufficient privileges (DDL 권한 부족)',
+              workId: item.id,
+            })
+          } else {
+            addNotification({
+              type: 'apply_complete',
+              instance: item.instanceName,
+              instanceType,
+              requestLabel: item.workName ?? '튜닝 작업',
+              sqlText: item.sqlText,
+              applyObjects: applyObjects.length > 0 ? applyObjects : undefined,
+              workId: item.id,
+            })
+          }
+        }
+      },
+    })
+  }
+
+  // 키보드 단축키
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      // 모달이 열려있을 때: Enter=확인, Esc=닫기
+      if (confirmAction) {
+        if (e.key === 'Enter') { e.preventDefault(); confirmAction.onConfirm() }
+        if (e.key === 'Escape') { e.preventDefault(); setConfirmAction(null) }
+        return
+      }
+      if (showRejectModal || showRetuneModal || showDeliveryModal !== null) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setShowRejectModal(false)
+          setShowRetuneModal(false)
+          setShowDeliveryModal(null)
+        }
+        return
+      }
+      // 이전/다음 네비게이션
+      if (e.key === 'ArrowLeft' && prevItem) { e.preventDefault(); goTo(prevItem.id) }
+      if (e.key === 'ArrowRight' && nextItem) { e.preventDefault(); goTo(nextItem.id) }
+      // 단축키 도움말 토글
+      if (e.key === '?') { e.preventDefault(); setShowShortcutHelp(prev => !prev) }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [prevItem, nextItem, goTo, status, confirmAction, showRejectModal, showRetuneModal, showDeliveryModal])
+
+  // ─── 렌더링 ──────────────────────────────────────
+  return (
+    <div className="p-6 space-y-4">
+      {/* ⓪ 이전/다음 네비게이션 바 (새 탭 팝업에서는 숨김) */}
+      {!isPopup && (
+        <div className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-4 py-2">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate(fromPath)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-500 hover:bg-slate-100 transition-colors border border-slate-200"
+            >
+              <ArrowLeft size={13} /> 목록으로
+            </button>
+            <div className="w-px h-5 bg-slate-200" />
+            <button
+              onClick={() => prevItem && goTo(prevItem.id)}
+              disabled={!prevItem}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${prevItem ? 'text-slate-600 hover:bg-slate-100' : 'text-slate-300 cursor-not-allowed'}`}
+            >
+              <ChevronLeft size={14} /> 이전
+            </button>
+            <span className="text-sm font-medium text-slate-700">
+              {currentIdx >= 0 ? currentIdx + 1 : '—'} / {filteredItems.length}
+            </span>
+            <button
+              onClick={() => nextItem && goTo(nextItem.id)}
+              disabled={!nextItem}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${nextItem ? 'text-slate-600 hover:bg-slate-100' : 'text-slate-300 cursor-not-allowed'}`}
+            >
+              다음 <ChevronRight size={14} />
+            </button>
+            {context && CONTEXT_LABELS[context] && (
+              <span className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full font-medium">
+                {CONTEXT_LABELS[context]}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowShortcutHelp(true)}
+              className="text-slate-400 hover:text-slate-600 transition-colors"
+              title="단축키 도움말"
+            >
+              <HelpCircle size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ① 워크플로 단계 + 기본 정보 (통합 헤더) */}
+      <div className="bg-white border border-slate-200 rounded-lg p-4">
+        {/* 워크플로 스텝 */}
+        <div className="mb-3 pb-3 border-b border-slate-100">
+          <WorkflowSteps status={status} />
+        </div>
+
+        {/* 기본 정보 */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <span className="font-mono text-sm text-slate-600">{item.sqlId}</span>
+              <SourceBadge source={item.source} />
+              <Badge variant={STATUS_BADGE_VARIANT[status]}>{STATUS_LABELS[status]}</Badge>
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${item.selectionSource === 'auto' ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-600'}`}>
+                {item.selectionSource === 'auto' ? '자동선정' : '수동선정'}
+              </span>
+            </div>
+            <div className="flex items-start gap-2 mb-2">
+              <pre className="text-[12px] font-mono text-slate-700 whitespace-pre-wrap break-all bg-surface-alt rounded-md border border-border px-3 py-2 max-h-[180px] overflow-y-auto flex-1 leading-[1.6]">{item.sqlText}</pre>
+              <button onClick={() => setSqlModalOpen(true)} className="shrink-0 text-[11px] text-indigo-600 hover:text-indigo-700 font-medium mt-1">전체 보기</button>
+            </div>
+            <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
+              <span className="flex items-center gap-1"><Server size={11} /> {item.instanceName}</span>
+              <span className="flex items-center gap-1"><Database size={11} /> {item.schemaName}</span>
+              <span className="flex items-center gap-1"><Calendar size={11} /> {formatDate(item.createdAt)}</span>
+              {item.executionContext && (
+                <span className="flex items-center gap-1">
+                  <Hash size={11} /> {item.executionContext}
+                  {item.estimatedDailyExec != null && ` · 일 ${formatNumber(item.estimatedDailyExec)}회`}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* tuned/verified/applied 상태: 우측에 개선율 + 검증 2축 뱃지 */}
+          {(['approval_pending', 'apply_pending', 'applied'] as const).includes(status as 'approval_pending' | 'apply_pending' | 'applied') && (
+            <div className="shrink-0 flex items-center gap-1.5">
+              {selectedPlan && <ImprovementBadge rate={Math.abs(selectedPlan.improvementRate)} />}
+              {item.improvementRate != null && !selectedPlan && <ImprovementBadge rate={Math.abs(item.improvementRate)} />}
+              {/* 실행결과 뱃지 */}
+              {item.executionResult === 'completed' && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">실측</span>
+              )}
+              {item.executionResult === 'timeout' && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-600">실측(T/O)</span>
+              )}
+              {item.executionResult === 'estimated' && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">예상</span>
+              )}
+              {/* 정합성 뱃지 */}
+              {item.integrityResult === 'match' && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">정합성 일치</span>
+              )}
+              {item.integrityResult === 'mismatch' && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-50 text-red-600">⚠ 정합성 불일치</span>
+              )}
+              {item.integrityResult === 'pending' && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">미확인</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* (tuned 상태 상세는 콘텐츠 영역의 좌우 분할 레이아웃에서 표시) */}
+      </div>
+
+      {/* SQL 전체보기 모달 */}
+      {sqlModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setSqlModalOpen(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[720px] max-h-[calc(80vh/1.1)] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+              <span className="text-sm font-semibold text-slate-900">SQL TEXT</span>
+              <button onClick={() => setSqlModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+            </div>
+            <div className="p-5 overflow-auto max-h-[calc(80vh/1.1-52px)]">
+              <pre className="font-mono text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{item.sqlText}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ③ 상태별 콘텐츠 */}
+      {status === 'pending' && <PendingContent item={item} bindInfo={bindInfo} />}
+      {status === 'tuning' && <TuningContent item={item} onCancel={handleCancelTuning} />}
+      {status === 'approval_pending' && (
+        <TunedContent
+          item={item}
+          recommendation={recommendation}
+          selectedPlan={selectedPlan}
+          selectedPlanId={selectedPlanId}
+          onSelectPlan={setSelectedPlanId}
+        />
+      )}
+      {status === 'apply_pending' && (
+        <VerifiedContent
+          item={item}
+          selectedPlan={selectedPlan}
+          actionItems={actionItems}
+          onDeliver={handleDeliverAction}
+          onAutoApply={handleAutoApply}
+          allActionsComplete={allActionsComplete}
+          onTransitionToApplied={handleTransitionToApplied}
+        />
+      )}
+      {status === 'applied' && (
+        <AppliedContent item={item} selectedPlan={selectedPlan} actionItems={actionItems} trendData={appliedTrend} />
+      )}
+      {status === 'rejected' && <RejectedContent item={item} />}
+
+      {/* ⑤ 하단 고정 액션 버튼 (튜닝완료 상태: 확인/재튜닝/반려) */}
+      {status === 'approval_pending' && selectedPlan && (
+        <div className="sticky bottom-0 bg-white border border-slate-200 rounded-lg p-4 shadow-lg flex items-center justify-between">
+          <div className="flex items-center gap-4 text-xs text-slate-400">
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={handleVerify}>
+              <CheckCircle2 size={13} className="mr-1" /> 확인
+            </Button>
+            <Button size="sm" variant="secondary" onClick={handleRequestRetune}>
+              <Undo2 size={13} className="mr-1" /> 재튜닝
+            </Button>
+            <Button size="sm" variant="danger" onClick={handleTuningImpossible}>
+              <XCircle size={13} className="mr-1" /> 반려
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* 하단 고정 액션 버튼 (rejected) */}
+      {status === 'rejected' && (
+        <div className="sticky bottom-0 bg-white border border-slate-200 rounded-lg p-4 shadow-lg flex items-center justify-end gap-2">
+          <Button size="sm" onClick={handleRequestRetune}>
+            <RefreshCw size={14} className="mr-1" /> 재튜닝 요청
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => navigate('/work')}>
+            작업 닫기
+          </Button>
+        </div>
+      )}
+
+      {/* ═══ 모달들 ═══ */}
+      {/* ConfirmDialog */}
+      {confirmAction && (
+        <ConfirmDialog
+          open={true}
+          title={confirmAction.title}
+          message={confirmAction.message}
+          variant={confirmAction.variant}
+          confirmLabel={confirmAction.action === 'cancel' ? '중단' : '확인'}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      {/* 반려 사유 모달 */}
+      {showRejectModal && (
+        <ModalOverlay onClose={() => setShowRejectModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[420px] overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">반려</h3>
+              <button onClick={() => setShowRejectModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">반려 사유</label>
+                <textarea
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 resize-none"
+                  rows={3}
+                  placeholder="반려 사유를 입력하세요..."
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 flex justify-end gap-2">
+              <Button size="sm" variant="secondary" onClick={() => setShowRejectModal(false)}>취소</Button>
+              <Button size="sm" variant="danger" onClick={confirmTuningImpossible} disabled={!rejectReason.trim()}>반려</Button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* 재튜닝 모달 */}
+      {showRetuneModal && (
+        <ModalOverlay onClose={() => setShowRetuneModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[420px] overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">재튜닝 요청</h3>
+              <button onClick={() => setShowRetuneModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-2">재튜닝 조건</label>
+                {['인덱스 없이', '힌트만', 'Rewrite 없이'].map(cond => (
+                  <label key={cond} className="flex items-center gap-2 text-sm text-slate-700 mb-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      checked={retuneConditions.includes(cond)}
+                      onChange={e => {
+                        if (e.target.checked) setRetuneConditions(prev => [...prev, cond])
+                        else setRetuneConditions(prev => prev.filter(c => c !== cond))
+                      }}
+                    />
+                    {cond}
+                  </label>
+                ))}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">사유</label>
+                <textarea
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
+                  rows={2}
+                  placeholder="재튜닝 사유 (선택)"
+                  value={retuneReason}
+                  onChange={e => setRetuneReason(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 flex justify-end gap-2">
+              <Button size="sm" variant="secondary" onClick={() => setShowRetuneModal(false)}>취소</Button>
+              <Button size="sm" onClick={confirmRetune}>재튜닝 요청</Button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* 단축키 도움말 오버레이 */}
+      {showShortcutHelp && <ShortcutHelpOverlay onClose={() => setShowShortcutHelp(false)} />}
+
+      {/* 권고 전달 모달 */}
+      {showDeliveryModal !== null && (
+        <ModalOverlay onClose={() => setShowDeliveryModal(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[420px] overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">권고 전달</h3>
+              <button onClick={() => setShowDeliveryModal(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-2">전달 수단</label>
+                <div className="flex gap-2 flex-wrap">
+                  {[
+                    { value: 'email', label: '메일', icon: <Mail size={13} /> },
+                    { value: 'slack', label: 'Slack', icon: <Send size={13} /> },
+                    { value: 'jira', label: 'JIRA', icon: <ListChecks size={13} /> },
+                    { value: 'copy', label: 'SQL 복사만', icon: <Copy size={13} /> },
+                  ].map(opt => (
+                    <label key={opt.value} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors ${deliveryMethod === opt.value ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                      <input type="radio" className="sr-only" checked={deliveryMethod === opt.value} onChange={() => setDeliveryMethod(opt.value)} />
+                      {opt.icon} {opt.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              {deliveryMethod !== 'copy' && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">수신자</label>
+                  <input
+                    type="text"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    placeholder={deliveryMethod === 'email' ? 'dev-team@company.com' : deliveryMethod === 'slack' ? '#채널명' : 'JIRA 프로젝트 키'}
+                    value={deliveryRecipient}
+                    onChange={e => setDeliveryRecipient(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 flex justify-end gap-2">
+              <Button size="sm" variant="secondary" onClick={() => setShowDeliveryModal(null)}>취소</Button>
+              <Button size="sm" onClick={confirmDelivery}>
+                <Send size={13} className="mr-1" /> 전달
+              </Button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+    </div>
+  )
+}
+
+// ─── 모달 오버레이 ──────────────────────────────────
+function ModalOverlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()}>{children}</div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+// ─── 상태별 서브 컴포넌트 ─────────────────────────────
+// ═══════════════════════════════════════════════════════
+
+// ─── Pending (튜닝예정) ──────────────────────────────
+function PendingContent({ item, bindInfo }: { item: WorkItem; bindInfo?: WorkBindInfo }) {
+  return (
+    <div className="space-y-4">
+      <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Clock size={16} className="text-indigo-600" />
+          <span className="text-sm font-semibold text-indigo-700">AI 분석 큐에 접수되었습니다</span>
+        </div>
+        <div className="text-xs text-indigo-600 space-y-1">
+          <div>자동으로 분석이 시작됩니다.</div>
+          {item.queuePosition != null && (
+            <div className="flex items-center gap-3 mt-2">
+              <span className="bg-indigo-100 px-2 py-0.5 rounded font-medium">대기 순서: {item.queuePosition}번째</span>
+              <span className="text-indigo-500">예상 시작: {item.queuePosition * 2}분 후</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 바인드 세트 */}
+      {bindInfo && bindInfo.variables.length > 0 && (
+        <CollapsibleSection title="바인드 변수" icon={<Database size={15} className="text-slate-500" />} defaultOpen={true}>
+          <div className="space-y-2">
+            {bindInfo.bindSensitive && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5">
+                <AlertTriangle size={13} />
+                Bind Sensitive — 바인드 값에 따라 플랜이 변경될 수 있습니다
+              </div>
+            )}
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-100">
+                  <th className="pb-1.5 font-medium">Name</th>
+                  <th className="pb-1.5 font-medium">Type</th>
+                  <th className="pb-1.5 font-medium">Value</th>
+                  <th className="pb-1.5 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bindInfo.variables.map(v => (
+                  <tr key={v.name} className="border-b border-slate-50">
+                    <td className="py-1.5 font-mono text-indigo-600">{v.name}</td>
+                    <td className="py-1.5 text-slate-600">{v.type}</td>
+                    <td className="py-1.5 font-mono">{v.value || <span className="text-slate-300">-</span>}</td>
+                    <td className="py-1.5">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        v.status === 'available' ? 'bg-green-50 text-green-700' :
+                        v.status === 'sample_only' ? 'bg-amber-50 text-amber-700' :
+                        'bg-slate-100 text-slate-500'
+                      }`}>
+                        {v.status === 'available' ? '사용가능' : v.status === 'sample_only' ? '샘플만가능' : 'unknown'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* 실행 맥락 */}
+      {item.executionContext && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <h3 className="text-xs font-semibold text-slate-700 mb-2">실행 맥락</h3>
+          <div className="flex gap-4 text-xs text-slate-600">
+            <div>
+              <span className="text-slate-400">유형: </span>
+              <span className="font-medium">{item.executionContext}</span>
+            </div>
+            {item.estimatedDailyExec != null && (
+              <div>
+                <span className="text-slate-400">예상 일 실행횟수: </span>
+                <span className="font-medium">{formatNumber(item.estimatedDailyExec)}회</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Tuning (튜닝중) ────────────────────────────────
+function TuningContent({ item, onCancel }: { item: WorkItem; onCancel: () => void }) {
+  const [elapsed, setElapsed] = useState(0)
+  const [currentStepIdx, setCurrentStepIdx] = useState(
+    item.analysisStep ? ANALYSIS_STEPS.findIndex(s => s.key === item.analysisStep) : 0
+  )
+
+  useEffect(() => {
+    const timer = setInterval(() => setElapsed(prev => prev + 1), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    // 단계 자동 진행 시뮬레이션
+    const stepTimers = [800, 1200, 2000]
+    let accumulated = 0
+    const timers = stepTimers.map((delay) => {
+      accumulated += delay
+      return setTimeout(() => {
+        setCurrentStepIdx(prev => Math.min(prev + 1, ANALYSIS_STEPS.length - 1))
+      }, accumulated)
+    })
+    return () => timers.forEach(clearTimeout)
+  }, [])
+
+  const currentKey = ANALYSIS_STEPS[currentStepIdx]?.key
+  const fmtElapsed = (s: number | null | undefined) => s == null ? '—' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
+  return (
+    <div className="space-y-4">
+      <TuningInProgressCard
+        variant="narrow"
+        currentStep={analysisStepToProgress(currentKey)}
+        elapsed={fmtElapsed(elapsed)}
+        stepDescription={ANALYSIS_STEP_DESC[currentKey || ''] ?? ''}
+        footer={
+          <div className="flex items-center justify-end">
+            <Button size="sm" variant="ghost" onClick={onCancel}>
+              <Ban size={13} className="mr-1" /> 분석 중단
+            </Button>
+          </div>
+        }
+      />
+    </div>
+  )
+}
+
+// ─── ApprovalPending (튜닝완료 · 사람 확인 대기) ★ 핵심 상태 ──────────────────
+// 30/70 분할 레이아웃: 좌측 튜닝안 선택, 우측 검증 결과 요약
+function TunedContent({ item, recommendation, selectedPlan, selectedPlanId, onSelectPlan }: {
+  item: WorkItem
+  recommendation?: ReturnType<typeof workRecommendations extends Record<string, infer V> ? () => V : never>
+  selectedPlan?: TuningPlan
+  selectedPlanId: string
+  onSelectPlan: (id: string) => void
+}) {
+  const { colTerm: __ctxColTerm } = useObjectInfo()
+
+  const plans = recommendation?.plans ?? []
+  const hasMultiplePlans = plans.length > 1
+  const [showPlanCompare, setShowPlanCompare] = useState(true)
+  const [fullscreen, setFullscreen] = useState<'sql' | 'plan' | 'all' | null>(null)
+  const [inlineFormatted, setInlineFormatted] = useState(false)
+
+  return (
+    <div className="space-y-4">
+      {/* ── 복수 튜닝안 선택 ── */}
+      {hasMultiplePlans && (
+        <div className="grid grid-cols-2 gap-2">
+          {plans.map(plan => {
+            const isSelected = plan.id === selectedPlanId
+            const hasIndex = plan.types.includes('index')
+            return (
+              <button
+                key={plan.id}
+                onClick={() => onSelectPlan(plan.id)}
+                className={`text-left border-2 rounded-lg p-2.5 transition-all text-xs ${
+                  isSelected ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-semibold text-slate-900">{plan.label}</span>
+                  {isSelected ? (
+                    <div className="w-3.5 h-3.5 rounded-full bg-indigo-600 flex items-center justify-center">
+                      <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                    </div>
+                  ) : (
+                    <div className="w-3.5 h-3.5 rounded-full border-2 border-slate-300" />
+                  )}
+                </div>
+                {hasIndex && (
+                  <span className="inline-flex items-center gap-0.5 text-[9px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 mb-1">
+                    <AlertTriangle size={9} />인덱스 생성 필요
+                  </span>
+                )}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="flex gap-0.5">
+                    {plan.types.map(t => (
+                      <span key={t} className={`text-[9px] font-medium px-1 py-0.5 rounded ${TYPE_COLORS[t].bg} ${TYPE_COLORS[t].text}`}>
+                        {TYPE_COLORS[t].label}
+                      </span>
+                    ))}
+                  </div>
+                  <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${
+                    plan.verifyType === 'actual' ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {plan.verifyType === 'actual' ? '실측' : '예상'}
+                  </span>
+                  <ImprovementBadge rate={Math.abs(plan.improvementRate)} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── 검증 결과 요약 ── */}
+      {selectedPlan && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <TunedVerificationSummary selectedPlan={selectedPlan} />
+        </div>
+      )}
+
+      {/* ── 실행계획 비교 토글 버튼 (카드 아래) ── */}
+      {selectedPlan && (
+        <button
+          onClick={() => setShowPlanCompare(!showPlanCompare)}
+          className="w-full flex items-center justify-center gap-1.5 py-2.5 border border-slate-200 rounded-lg text-xs font-medium text-indigo-600 hover:bg-indigo-50 transition-colors"
+        >
+          <FileText size={13} />
+          실행계획 비교 보기
+          {showPlanCompare ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+      )}
+
+      {/* ── 실행계획 비교 (접힘/펼침) ── */}
+      {showPlanCompare && selectedPlan && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-4">
+          {/* 전체 비교 버튼 */}
+          <div className="flex items-center justify-end">
+            <button
+              onClick={() => setFullscreen('all')}
+              className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium text-slate-500 hover:bg-slate-100 transition-colors"
+            >
+              <Maximize2 size={12} /> 전체 비교
+            </button>
+          </div>
+
+          {/* SQL TEXT 좌우 비교 */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">SQL 비교</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setInlineFormatted(f => !f)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${inlineFormatted ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
+                >
+                  <FileText size={10} />
+                  {inlineFormatted ? 'Format ON' : 'Format'}
+                </button>
+                <button
+                  onClick={() => setFullscreen('sql')}
+                  className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <Maximize2 size={10} /> 전체화면
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 border border-slate-200 rounded-lg overflow-hidden">
+              <div className="border-r border-slate-200">
+                <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                  <span className="text-[10px] font-semibold text-slate-600">AS-IS</span>
+                </div>
+                <ResizablePanel defaultHeight={320} minHeight={120} maxHeight={1200}>
+                  <div className="h-full overflow-auto p-3">
+                    <pre className="text-xs font-mono whitespace-pre-wrap text-slate-700">{highlightSQL(inlineFormatted ? formatSQL(item.sqlText, __ctxColTerm) : item.sqlText)}</pre>
+                  </div>
+                </ResizablePanel>
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                  <span className="text-[10px] font-semibold text-slate-600">TO-BE</span>
+                </div>
+                <ResizablePanel defaultHeight={320} minHeight={120} maxHeight={1200}>
+                  <div className="h-full overflow-auto p-3">
+                    <pre className="text-xs font-mono whitespace-pre-wrap text-slate-700">{highlightSQL(inlineFormatted ? formatSQL(selectedPlan.tunedSqlText || item.sqlText, __ctxColTerm) : (selectedPlan.tunedSqlText || item.sqlText))}</pre>
+                  </div>
+                </ResizablePanel>
+              </div>
+            </div>
+          </div>
+
+          {/* 실행계획 좌우 비교 */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">실행계획 비교</span>
+              <button
+                onClick={() => setFullscreen('plan')}
+                className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <Maximize2 size={10} /> 전체화면
+              </button>
+            </div>
+            <div className="grid grid-cols-2 border border-slate-200 rounded-lg overflow-hidden">
+              <div className="border-r border-slate-200">
+                <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                  <span className="text-[10px] font-semibold text-slate-600">AS-IS</span>
+                </div>
+                <ResizablePanel defaultHeight={240} minHeight={120} maxHeight={600}>
+                  <div className="h-full overflow-auto p-3">
+                    <PlanTable text={selectedPlan.originalPlanText} />
+                  </div>
+                </ResizablePanel>
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                  <span className="text-[10px] font-semibold text-slate-600">TO-BE</span>
+                </div>
+                <ResizablePanel defaultHeight={240} minHeight={120} maxHeight={600}>
+                  <div className="h-full overflow-auto p-3">
+                    <PlanTable text={selectedPlan.tunedPlanText} />
+                  </div>
+                </ResizablePanel>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI 분석 근거 */}
+      {selectedPlan?.rationale?.length && (
+        <div id="section-rationale" className="bg-white border border-slate-200 rounded-lg p-4 scroll-mt-16">
+          <div className="flex items-center gap-2 mb-3">
+            <Lightbulb size={14} className="text-amber-500" />
+            <span className="text-xs font-semibold text-slate-500 uppercase">AI 분석 근거</span>
+          </div>
+          <div className="space-y-2">
+            {selectedPlan.rationale.map((line, i) => (
+              <div key={i} className="flex gap-2.5 text-xs text-slate-700">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-semibold text-[10px]">{i + 1}</span>
+                <p className="pt-0.5 leading-relaxed">{line}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 검증 데이터 없는 경우 (레거시 지원) */}
+      {!selectedPlan && item.improvementRate != null && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-800">튜닝 결과</h3>
+            <ImprovementBadge rate={item.improvementRate} />
+          </div>
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <MetricCompareCard label="Elapsed Time" original={item.originalElapsed} tuned={item.tunedElapsed} unit="ms" better="lower" />
+            <MetricCompareCard label="Buffer Gets" original={item.originalBuffers} tuned={item.tunedBuffers} better="lower" />
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen modals */}
+      {fullscreen === 'sql' && selectedPlan && (
+        <FullscreenCompare left={item.sqlText} right={selectedPlan.tunedSqlText || item.sqlText} leftLabel="AS-IS SQL" rightLabel="TO-BE SQL" mode="sql" onClose={() => setFullscreen(null)} />
+      )}
+      {fullscreen === 'plan' && selectedPlan && (
+        <FullscreenCompare left={selectedPlan.originalPlanText} right={selectedPlan.tunedPlanText} leftLabel="AS-IS 실행계획" rightLabel="TO-BE 실행계획" mode="plan" onClose={() => setFullscreen(null)} />
+      )}
+      {fullscreen === 'all' && selectedPlan && (
+        <FullscreenCompareAll sqlLeft={item.sqlText} sqlRight={selectedPlan.tunedSqlText || item.sqlText} planLeft={selectedPlan.originalPlanText} planRight={selectedPlan.tunedPlanText} onClose={() => setFullscreen(null)} />
+      )}
+    </div>
+  )
+}
+
+// ─── 검증 결과 요약 (TunedContent 내부용) ────────────
+function TunedVerificationSummary({ selectedPlan }: { selectedPlan: TuningPlan }) {
+  return (
+    <>
+      {/* 검증 유형 헤더 */}
+      <div className="flex items-center gap-2 mb-3">
+        {selectedPlan.verifyType === 'actual' ? (
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-green-700">
+            <CheckCircle2 size={15} /> 실측 검증
+            <span className="text-[10px] font-normal bg-green-100 text-green-700 px-1.5 py-0.5 rounded">운영 인스턴스</span>
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-amber-700">
+            <AlertTriangle size={15} /> 예상 검증
+            <span className="text-[10px] font-normal bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">예상</span>
+          </span>
+        )}
+      </div>
+
+      {/* AS-IS → TO-BE 수치 비교 */}
+      <div className="space-y-2.5">
+        {[
+          { label: 'Elapsed', orig: selectedPlan.originalElapsed, tuned: selectedPlan.tunedElapsed, format: formatMs },
+          { label: 'Buffer Gets', orig: selectedPlan.originalBuffers, tuned: selectedPlan.tunedBuffers, format: formatNumber },
+          { label: 'Disk Reads', orig: selectedPlan.originalDiskReads, tuned: selectedPlan.tunedDiskReads, format: formatNumber },
+        ].map(row => {
+          const { rate, improved } = calcChangeRate(row.orig, row.tuned)
+          return (
+            <div key={row.label} className="flex items-center gap-3">
+              <span className="text-xs text-slate-500 w-20">{row.label}</span>
+              <span className="text-sm font-mono text-slate-500">{row.orig == null ? '—' : row.format(row.orig)}</span>
+              <span className="text-slate-300">→</span>
+              <span className={`text-sm font-mono font-semibold ${row.tuned == null ? 'text-slate-400' : improved ? 'text-green-600' : 'text-red-600'}`}>{row.tuned == null ? '—' : row.format(row.tuned)}</span>
+              {rate !== null && rate !== 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${improved ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                  {improved ? '↓' : '↑'}{Math.abs(rate)}%
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* 튜닝안 요약 */}
+      <div className="mt-3 pt-3 border-t border-slate-100">
+        <div className="flex items-center gap-2 mb-1">
+          <Sparkles size={13} className="text-indigo-500" />
+          <TypeBadges types={selectedPlan.types} />
+        </div>
+        <p className="text-xs text-slate-600 bg-slate-50 rounded-md p-2">{selectedPlan.summary}</p>
+      </div>
+
+      {selectedPlan.verifyType === 'estimated' && (
+        <div className="mt-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5">
+          인덱스 생성 후 운영 효과에서 실측 확인 가능합니다
+        </div>
+      )}
+    </>
+  )
+}
+
+// ─── ApplyPending (반영대기 · 사람 확인 완료, 반영 대기) ──────────────────────────────
+function VerifiedContent({ item, selectedPlan, actionItems, onDeliver, onAutoApply, allActionsComplete, onTransitionToApplied }: {
+  item: WorkItem
+  selectedPlan?: TuningPlan
+  actionItems: ActionItem[]
+  onDeliver: (id: number) => void
+  onAutoApply: (id: number) => void
+  allActionsComplete: boolean
+  onTransitionToApplied: () => void
+}) {
+  const { colTerm: __ctxColTerm } = useObjectInfo()
+
+  const [verifiedFullscreen, setVerifiedFullscreen] = useState<'sql' | 'plan' | 'all' | null>(null)
+  const [verifiedFormatted, setVerifiedFormatted] = useState(false)
+
+  return (
+    <div className="space-y-4">
+      {/* 확인(승인) 정보 */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+        <div className="flex items-center gap-2 text-sm text-blue-700">
+          <CheckCircle2 size={16} />
+          <span className="font-medium">확인 완료</span>
+          {item.verifiedBy && <span className="text-xs text-blue-500">— {item.verifiedBy}, {item.verifiedAt ? formatDateFull(item.verifiedAt) : ''}</span>}
+        </div>
+      </div>
+
+      {/* 선택된 튜닝안 요약 (읽기 전용) */}
+      {selectedPlan && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-xs font-semibold text-slate-700">선택된 튜닝안</h3>
+            <TypeBadges types={selectedPlan.types} />
+            <ImprovementBadge rate={Math.abs(selectedPlan.improvementRate)} />
+          </div>
+          <p className="text-xs text-slate-500">{selectedPlan.summary}</p>
+        </div>
+      )}
+
+      {/* SQL 비교 */}
+      {selectedPlan && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase">SQL 비교</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setVerifiedFormatted(f => !f)}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${verifiedFormatted ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
+              >
+                <FileText size={10} />
+                {verifiedFormatted ? 'Format ON' : 'Format'}
+              </button>
+              <button
+                onClick={() => setVerifiedFullscreen('sql')}
+                className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <Maximize2 size={10} /> 전체화면
+              </button>
+              <button
+                onClick={() => setVerifiedFullscreen('all')}
+                className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium text-slate-500 hover:bg-slate-100 transition-colors"
+              >
+                <Maximize2 size={12} /> 전체 비교
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 border border-slate-200 rounded-lg overflow-hidden">
+            <div className="border-r border-slate-200">
+              <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                <span className="text-[10px] font-semibold text-slate-600">AS-IS</span>
+              </div>
+              <ResizablePanel defaultHeight={320} minHeight={120} maxHeight={1200}>
+                <div className="h-full overflow-auto p-3">
+                  <pre className="text-xs font-mono whitespace-pre-wrap text-slate-700">{highlightSQL(verifiedFormatted ? formatSQL(item.sqlText, __ctxColTerm) : item.sqlText)}</pre>
+                </div>
+              </ResizablePanel>
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                <span className="text-[10px] font-semibold text-slate-600">TO-BE</span>
+              </div>
+              <ResizablePanel defaultHeight={320} minHeight={120} maxHeight={1200}>
+                <div className="h-full overflow-auto p-3">
+                  <pre className="text-xs font-mono whitespace-pre-wrap text-slate-700">{highlightSQL(verifiedFormatted ? formatSQL(selectedPlan.tunedSqlText || item.sqlText, __ctxColTerm) : (selectedPlan.tunedSqlText || item.sqlText))}</pre>
+                </div>
+              </ResizablePanel>
+            </div>
+          </div>
+
+          {/* 실행계획 비교 */}
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase">실행계획 비교</span>
+            <button
+              onClick={() => setVerifiedFullscreen('plan')}
+              className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              <Maximize2 size={10} /> 전체화면
+            </button>
+          </div>
+          <div className="grid grid-cols-2 border border-slate-200 rounded-lg overflow-hidden">
+            <div className="border-r border-slate-200">
+              <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                <span className="text-[10px] font-semibold text-slate-600">AS-IS</span>
+              </div>
+              <ResizablePanel defaultHeight={240} minHeight={120} maxHeight={600}>
+                <div className="h-full overflow-auto p-3">
+                  <PlanTable text={selectedPlan.originalPlanText} />
+                </div>
+              </ResizablePanel>
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5 px-3 py-1 border-b border-slate-100 bg-slate-50">
+                <span className="text-[10px] font-semibold text-slate-600">TO-BE</span>
+              </div>
+              <ResizablePanel defaultHeight={240} minHeight={120} maxHeight={600}>
+                <div className="h-full overflow-auto p-3">
+                  <PlanTable text={selectedPlan.tunedPlanText} />
+                </div>
+              </ResizablePanel>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI 분석 근거 */}
+      {selectedPlan?.rationale?.length && (
+        <div id="section-rationale" className="bg-white border border-slate-200 rounded-lg p-4 scroll-mt-16">
+          <div className="flex items-center gap-2 mb-3">
+            <Lightbulb size={14} className="text-amber-500" />
+            <span className="text-xs font-semibold text-slate-500 uppercase">AI 분석 근거</span>
+          </div>
+          <div className="space-y-2">
+            {selectedPlan.rationale.map((line, i) => (
+              <div key={i} className="flex gap-2.5 text-xs text-slate-700">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-semibold text-[10px]">{i + 1}</span>
+                <p className="pt-0.5 leading-relaxed">{line}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 액션 항목 목록 */}
+      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ListChecks size={15} className="text-slate-500" />
+            <h3 className="text-sm font-semibold text-slate-800">액션 항목</h3>
+            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+              {actionItems.filter(ai => ai.status === 'completed' || ai.status === 'applied' || ai.status === 'delivered').length}/{actionItems.length} 완료
+            </span>
+          </div>
+        </div>
+        <div className="divide-y divide-slate-50">
+          {actionItems.map(ai => (
+            <ActionItemRow key={ai.id} item={ai} onDeliver={onDeliver} onAutoApply={onAutoApply} />
+          ))}
+        </div>
+      </div>
+
+      {/* 인덱스 생성 시간 제약 */}
+      {actionItems.some(ai => ai.type === 'auto_apply' && ai.scheduledTime) && (
+        <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+          <Clock size={14} />
+          <span>인덱스 생성 가능 시간: 22:00~06:00 (정책 기준)</span>
+          {(() => {
+            const now = new Date()
+            const hour = now.getHours()
+            return hour >= 6 && hour < 22
+              ? <span className="ml-1 font-medium text-amber-800">— 현재 시간 밖, 예약됨</span>
+              : <span className="ml-1 font-medium text-green-700">— 실행 가능</span>
+          })()}
+        </div>
+      )}
+
+      {/* 모든 액션 완료 시 전환 버튼 */}
+      {allActionsComplete && (
+        <div className="sticky bottom-0 bg-green-50 border border-green-200 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-green-700">
+            <CheckCircle2 size={16} />
+            모든 액션 항목이 처리되었습니다.
+          </div>
+          <Button size="sm" onClick={onTransitionToApplied}>
+            반영완료로 전환
+          </Button>
+        </div>
+      )}
+
+      {/* Fullscreen modals */}
+      {verifiedFullscreen === 'sql' && selectedPlan && (
+        <FullscreenCompare left={item.sqlText} right={selectedPlan.tunedSqlText || item.sqlText} leftLabel="AS-IS SQL" rightLabel="TO-BE SQL" mode="sql" onClose={() => setVerifiedFullscreen(null)} />
+      )}
+      {verifiedFullscreen === 'plan' && selectedPlan && (
+        <FullscreenCompare left={selectedPlan.originalPlanText} right={selectedPlan.tunedPlanText} leftLabel="AS-IS 실행계획" rightLabel="TO-BE 실행계획" mode="plan" onClose={() => setVerifiedFullscreen(null)} />
+      )}
+      {verifiedFullscreen === 'all' && selectedPlan && (
+        <FullscreenCompareAll sqlLeft={item.sqlText} sqlRight={selectedPlan.tunedSqlText || item.sqlText} planLeft={selectedPlan.originalPlanText} planRight={selectedPlan.tunedPlanText} onClose={() => setVerifiedFullscreen(null)} />
+      )}
+    </div>
+  )
+}
+
+// ─── 액션 항목 행 ────────────────────────────────────
+function ActionItemRow({ item, onDeliver, onAutoApply }: {
+  item: ActionItem
+  onDeliver: (id: number) => void
+  onAutoApply: (id: number) => void
+}) {
+  const statusConfig: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
+    pending: { icon: <CircleDot size={13} />, label: '대기', color: 'text-slate-500' },
+    running: { icon: <Loader2 size={13} className="animate-spin" />, label: '실행중', color: 'text-blue-600' },
+    completed: { icon: <CheckCircle2 size={13} />, label: '반영완료', color: 'text-green-600' },
+    failed: { icon: <XCircle size={13} />, label: '실패', color: 'text-red-600' },
+    delivered: { icon: <Send size={13} />, label: '전달됨', color: 'text-blue-600' },
+    dev_confirmed: { icon: <Check size={13} />, label: '개발팀확인', color: 'text-indigo-600' },
+    applied: { icon: <CheckCircle2 size={13} />, label: '반영완료', color: 'text-green-600' },
+  }
+
+  const sc = statusConfig[item.status] ?? statusConfig.pending
+
+  return (
+    <div className="px-4 py-3 flex items-center gap-3">
+      {/* 상태 아이콘 */}
+      <div className={sc.color}>{sc.icon}</div>
+
+      {/* 라벨 + 타입 */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-slate-900">{item.label}</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+            item.type === 'auto_apply' ? 'bg-blue-50 text-blue-600' : 'bg-indigo-50 text-indigo-600'
+          }`}>
+            {item.type === 'auto_apply' ? '자동적용' : '권고전달'}
+          </span>
+        </div>
+        {item.detail && <div className="text-[10px] text-slate-400 mt-0.5 truncate">{item.detail}</div>}
+        {item.deliveredTo && (
+          <div className="text-[10px] text-slate-400 mt-0.5">
+            전달: {item.deliveredTo} ({item.deliveredAt ? formatDate(item.deliveredAt) : ''})
+          </div>
+        )}
+      </div>
+
+      {/* 상태 배지 */}
+      <span className={`text-xs font-medium ${sc.color}`}>{sc.label}</span>
+
+      {/* 액션 버튼 */}
+      {item.type === 'auto_apply' && item.status === 'pending' && (
+        <Button size="sm" variant="secondary" onClick={() => onAutoApply(item.id)}>
+          <Database size={12} className="mr-1" /> 실행
+        </Button>
+      )}
+      {item.type === 'recommendation' && item.status === 'pending' && (
+        <Button size="sm" variant="secondary" onClick={() => onDeliver(item.id)}>
+          <Send size={12} className="mr-1" /> 권고 전달
+        </Button>
+      )}
+    </div>
+  )
+}
+
+// ─── Applied (반영완료) ───────────────────────────────
+function AppliedContent({ item, selectedPlan, actionItems, trendData }: {
+  item: WorkItem
+  selectedPlan?: TuningPlan
+  actionItems: ActionItem[]
+  trendData: { points: { time: string; elapsed: number; label: string }[]; applyIndex: number } | null
+}) {
+  return (
+    <div className="space-y-4">
+      {/* 반영완료 정보 */}
+      <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-center gap-2 text-sm text-green-700">
+        <CheckCircle2 size={16} />
+        <span className="font-medium">반영 완료</span>
+        {item.appliedAt && <span className="text-xs text-green-500">— {formatDateFull(item.appliedAt)}</span>}
+      </div>
+
+      {/* 완료된 액션 항목 */}
+      {actionItems.length > 0 && (
+        <CollapsibleSection title="액션 항목" icon={<ListChecks size={15} className="text-slate-500" />} defaultOpen={false}>
+          <div className="space-y-2">
+            {actionItems.map(ai => (
+              <div key={ai.id} className="flex items-center gap-2 text-xs text-slate-600">
+                <CheckCircle2 size={13} className="text-green-500" />
+                <span>{ai.label}</span>
+                <span className="text-[10px] text-slate-400">
+                  {ai.type === 'auto_apply' ? '자동적용' : '권고전달'}
+                </span>
+                {ai.completedAt && <span className="text-[10px] text-slate-400 ml-auto">{formatDate(ai.completedAt)}</span>}
+              </div>
+            ))}
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* 운영 효과: Before/After 비교 */}
+      {selectedPlan && (
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-slate-800 mb-3">운영 효과 (적용 전 vs 현재)</h3>
+          <div className="overflow-x-auto mb-2">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="pb-2 font-medium">지표</th>
+                  <th className="pb-2 font-medium text-right">적용 전</th>
+                  <th className="pb-2 font-medium text-right">현재</th>
+                  <th className="pb-2 font-medium text-right">변화</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { label: 'Buffer Gets', orig: item.originalBuffers, tuned: item.tunedBuffers ?? item.originalBuffers, format: formatNumber },
+                  { label: 'Elapsed', orig: item.originalElapsed, tuned: item.tunedElapsed ?? item.originalElapsed, format: formatMs },
+                ].map(row => {
+                  const { rate, improved } = calcChangeRate(row.orig, row.tuned)
+                  return (
+                    <tr key={row.label} className="border-b border-slate-50">
+                      <td className="py-2 font-medium text-slate-700">{row.label}</td>
+                      <td className="py-2 text-right font-mono text-slate-600">{row.format(row.orig)}</td>
+                      <td className="py-2 text-right font-mono font-semibold text-slate-900">{row.format(row.tuned)}</td>
+                      <td className="py-2 text-right">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${improved ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                          {improved ? '↓' : '↑'}{Math.abs(rate)}%
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[10px] text-slate-400 mt-1">
+            액션 항목별 효과 분리는 정확한 산출이 불가하여 작업 전체 기준으로 표시합니다
+          </div>
+        </div>
+      )}
+
+      {/* Elapsed 추이 차트 */}
+      {trendData && (
+        <CollapsibleSection title="Elapsed 추이 (적용 전후)">
+          <div style={{ width: '100%', height: 200 }}>
+            <ResponsiveContainer>
+              <AreaChart data={trendData.points} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="time" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => formatMs(v)} />
+                <Tooltip
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb' }}
+                  formatter={(value) => [value != null ? formatMs(Number(value)) : '—', 'Elapsed']}
+                />
+                <ReferenceLine
+                  x={trendData.points[trendData.applyIndex]?.time}
+                  stroke="#ef4444"
+                  strokeDasharray="4 4"
+                  strokeWidth={1.5}
+                  label={{ value: '반영', position: 'top', fontSize: 10, fill: '#ef4444' }}
+                />
+                <Area type="monotone" dataKey="elapsed" stroke="#6366f1" fill="#eef2ff" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </CollapsibleSection>
+      )}
+    </div>
+  )
+}
+
+// ─── Rejected (반려) ─────────────────────
+function RejectedContent({ item }: { item: WorkItem }) {
+  return (
+    <div className="space-y-4">
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <div className="flex items-center gap-2 text-sm font-medium text-red-700 mb-1">
+          <XCircle size={16} /> 반려
+        </div>
+        <div className="text-xs text-red-600 space-y-1">
+          {item.rejectedBy && <div>처리자: {item.rejectedBy} · {item.rejectedAt ? formatDateFull(item.rejectedAt) : ''}</div>}
+          {item.rejectedReason && <div className="mt-1">사유: {item.rejectedReason}</div>}
+          {!item.rejectedReason && <div>개선 효과가 미미하여 반려 처리되었습니다.</div>}
+        </div>
+      </div>
+
+      {item.improvementRate != null && (
+        <div className="grid grid-cols-2 gap-3">
+          <MetricCompareCard label="Elapsed Time" original={item.originalElapsed} tuned={item.tunedElapsed} unit="ms" better="lower" />
+          <MetricCompareCard label="Buffer Gets" original={item.originalBuffers} tuned={item.tunedBuffers} better="lower" />
+        </div>
+      )}
+    </div>
+  )
+}
+

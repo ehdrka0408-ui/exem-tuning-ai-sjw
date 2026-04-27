@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build output
+dist/
+build/
+.next/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# DB
+*.sqlite
+*.db
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Backup
+*.bak
+*~
+
+# Secrets
+claude-mcp-*.json
+*.key
+*.pem
+service-account*.json

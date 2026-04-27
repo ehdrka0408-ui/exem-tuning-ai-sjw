@@ -1,0 +1,11 @@
+import puppeteer from 'puppeteer'
+const b = await puppeteer.launch({headless:'new',args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']})
+const p = await b.newPage()
+await p.setViewport({width:1600,height:900})
+await p.goto('http://10.10.45.185:3003/work',{waitUntil:'networkidle2'})
+await new Promise(r=>setTimeout(r,1500))
+await p.screenshot({path:'/tmp/cap_toolbar_1600.png'})
+await p.setViewport({width:1280,height:800})
+await new Promise(r=>setTimeout(r,500))
+await p.screenshot({path:'/tmp/cap_toolbar_1280.png'})
+await b.close()

@@ -1,0 +1,460 @@
+import { useState, useRef, useEffect } from 'react'
+import { Send, ChevronDown, Check, X, Plus, Database, SquarePen } from 'lucide-react'
+import { workItems, type WorkItem } from '../mocks/workItems'
+import { addNewWorkItem, getNewV1Items } from '../mocks/newItemsStore'
+import { workRecommendations } from '../mocks/recommendations'
+import { workBindSets } from '../mocks/executionValidation'
+import WorkbenchContent from './work/WorkbenchContent'
+import DirectInputIdle from '../components/canvas/DirectInputIdle'
+import TuningInProgressCard from '../components/common/TuningInProgressCard'
+import { type ProgressStepNumber } from '../components/common/ProgressStepBar'
+
+// ─── 상수 ─────────────────────────────────────────
+// ─── Target DB/Schema 메타 (backend API) — DBMS agnostic ────────────
+const TARGET_API_BASE = (import.meta as unknown as { env: { VITE_API_BASE?: string } }).env.VITE_API_BASE || 'http://10.10.45.119:8000'
+interface TargetSchemaMeta { id: number; schema_name: string; display_name?: string | null }
+interface TargetDatabaseMeta { id: number; instance_id: string; db_name: string; display_name?: string | null; schemas: TargetSchemaMeta[] }
+interface TargetInstanceMeta { instance_id: string; databases: TargetDatabaseMeta[] }
+
+// Fallback 상수 — API 실패 시에만 사용
+const INSTANCES = ['INS-REPO']
+const SCHEMAS = ['SALES', 'FIN', 'HR', 'MXGREPO', 'MXGREPO2']
+const MODULES = ['OMS_BATCH', 'OMS_ONLINE', 'HR_WEB', 'HR_ADMIN', 'FIN_CORE', 'SALES_RPT', 'SALES_API', 'ETL_NIGHTLY']
+
+type SqlWorkloadType = 'oltp' | 'batch' | 'adhoc'
+const WORKLOAD_OPTIONS: { value: SqlWorkloadType; label: string; defaultDaily: string }[] = [
+  { value: 'oltp', label: 'OLTP', defaultDaily: '1500' },
+  { value: 'batch', label: 'BATCH', defaultDaily: '50' },
+  { value: 'adhoc', label: 'AD HOC', defaultDaily: '5' },
+]
+
+const TUNING_STEPS = [
+  { label: 'SQL 구문 분석', desc: 'SQL 구조와 테이블 관계를 파악하고 있습니다' },
+  { label: '실행계획 수집', desc: '현재 실행계획을 분석하고 있습니다' },
+  { label: '대안 생성', desc: 'AI가 튜닝 대안을 탐색하고 있습니다' },
+  { label: '검증 실행', desc: '대안 SQL의 성능을 측정하고 있습니다' },
+  { label: '결과 정리', desc: '튜닝 결과를 정리하고 있습니다' },
+]
+
+// ─── 타입 ─────────────────────────────────────────
+type Phase = 'idle' | 'tuning' | 'done'
+
+// ─── Mock 튜닝 결과 생성 ─────────────────────────────
+function generateMockResult(itemId: string, sqlText: string, item: WorkItem) {
+  const planId = `${itemId}-A`
+  const origE = item.originalElapsed
+  const origB = item.originalBuffers
+  const rate = 60 + Math.floor(Math.random() * 30)
+  const tunedE = Math.round(origE * (1 - rate / 100))
+  const tunedB = Math.round(origB * (1 - rate / 100))
+
+  const tunedSql = `/* 튜닝 적용 — 인덱스 활용 최적화 */\n${sqlText.replace(/SELECT/i, 'SELECT /*+ INDEX_RS_ASC(t1) */')}`
+
+  workRecommendations[itemId] = {
+    workItemId: itemId,
+    selectedPlanId: planId,
+    plans: [{
+      id: planId,
+      label: '인덱스안',
+      types: ['index', 'hint'],
+      verifyType: 'actual',
+      improvementRate: -rate,
+      summary: `인덱스 생성 + 힌트 적용으로 ${rate}% 성능 개선`,
+      rationale: [
+        'Full Table Scan → Index Range Scan 전환',
+        '불필요한 정렬 제거로 Buffer Gets 절감',
+        '실측 기반 검증 완료',
+      ],
+      originalElapsed: origE,
+      tunedElapsed: tunedE,
+      originalBuffers: origB,
+      tunedBuffers: tunedB,
+      originalDiskReads: Math.round(origB * 0.3),
+      tunedDiskReads: Math.round(tunedB * 0.1),
+      originalPlanText: `SQL_ID ${item.sqlId}, child number 0\nPlan hash value: ${Math.floor(Math.random() * 9999999999)}\n\n| Id | Operation           | Name | Starts | E-Rows | A-Rows | A-Time       | Buffers |\n|  0 | SELECT STATEMENT    |      |      1 |        |   3000 | 00:00:${(origE / 1000).toFixed(2)} |  ${origB} |\n|  1 |  HASH JOIN          |      |      1 |   5000 |   5000 | 00:00:${(origE / 1000).toFixed(2)} |  ${origB} |\n|  2 |   TABLE ACCESS FULL | T1   |      1 |  50000 |  50000 | 00:00:01.20 |   ${Math.round(origB * 0.6)} |\n|  3 |   TABLE ACCESS FULL | T2   |      1 |  10000 |  10000 | 00:00:00.80 |   ${Math.round(origB * 0.4)} |`,
+      tunedPlanText: `SQL_ID ${item.sqlId}, child number 1\nPlan hash value: ${Math.floor(Math.random() * 9999999999)}\n\n| Id | Operation                     | Name       | Starts | E-Rows | A-Rows | A-Time       | Buffers |\n|  0 | SELECT STATEMENT              |            |      1 |        |   3000 | 00:00:${(tunedE / 1000).toFixed(2)} |  ${tunedB} |\n|  1 |  NESTED LOOPS                 |            |      1 |   5000 |   5000 | 00:00:${(tunedE / 1000).toFixed(2)} |  ${tunedB} |\n| *2 |   INDEX RANGE SCAN            | IDX_T1_NEW |      1 |   5000 |   5000 | 00:00:00.01 |    ${Math.round(tunedB * 0.1)} |\n|  3 |   TABLE ACCESS BY INDEX ROWID | T1         |   5000 |      1 |   5000 | 00:00:00.02 |    ${Math.round(tunedB * 0.3)} |\n| *4 |   INDEX RANGE SCAN            | IDX_T2_REF |   5000 |      1 |   5000 | 00:00:00.01 |    ${Math.round(tunedB * 0.2)} |\n|  5 |   TABLE ACCESS BY INDEX ROWID | T2         |   5000 |      1 |   5000 | 00:00:00.00 |    ${Math.round(tunedB * 0.1)} |`,
+      tunedSqlText: tunedSql,
+      indexDdl: `CREATE INDEX IDX_T1_NEW ON T1 (col1, col2) TABLESPACE USERS;`,
+      bindSetId: undefined,
+    }],
+  }
+
+  const bindMatches = sqlText.match(/:[a-zA-Z_]\w*/g)
+  if (bindMatches && bindMatches.length > 0) {
+    const uniqueBinds = [...new Set(bindMatches)]
+    workBindSets[itemId] = {
+      workItemId: itemId,
+      bindSensitive: false,
+      sets: [{
+        id: `BS-${itemId}-1`,
+        capturedAt: new Date().toISOString(),
+        source: 'V$SQL' as const,
+        variables: uniqueBinds.map(name => ({
+          name, type: 'VARCHAR2', value: 'sample_value',
+        })),
+      }],
+    }
+  }
+
+  const allItems = [...workItems, ...getNewV1Items()]
+  const target = allItems.find(w => w.id === itemId)
+  if (target) {
+    target.status = 'approval_pending'
+    target.executionResult = 'completed'
+    target.tunedElapsed = tunedE
+    target.tunedBuffers = tunedB
+  }
+  return target
+}
+
+function generateSqlId(sql: string): string {
+  let hash = 0
+  for (let i = 0; i < sql.length; i++) {
+    hash = ((hash << 5) - hash + sql.charCodeAt(i)) | 0
+  }
+  return Math.abs(hash).toString(16).slice(0, 8).padStart(8, '0')
+}
+
+// ─── 셀렉트 컴포넌트 ─────────────────────────────
+function StyledSelect({ value, onChange, options, label }: {
+  value: string; onChange: (v: string) => void; options: string[]; label: string
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[11px] text-text-muted font-medium shrink-0">{label}</span>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className="appearance-none text-xs font-medium text-text-primary bg-surface-alt border border-border rounded-md pl-2.5 pr-6 py-1 cursor-pointer hover:border-text-muted focus:border-action focus:ring-1 focus:ring-action/30 focus:outline-none transition-colors"
+        >
+          {options.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+      </div>
+    </div>
+  )
+}
+
+// ─── Tab 모델 ─────────────────────────────────────
+let _nextTabId = 0
+
+interface CanvasTab {
+  id: string
+  phase: Phase
+  sql: string
+  sqlId: string
+  instance: string
+  schema: string
+  databaseId?: number | null
+  workloadType: SqlWorkloadType
+  moduleName: string
+  dailyExecs: string
+  alias: string
+  remark: string
+  showMeta: boolean
+  tuningStep: number
+  elapsed: number
+  resultItem: WorkItem | null
+  resultRate: number
+  statusOverrides: Record<string, WorkItem['status']>
+}
+
+function freshTab(): CanvasTab {
+  return {
+    id: String(++_nextTabId),
+    phase: 'idle', sql: '', sqlId: '',
+    instance: INSTANCES[0], schema: SCHEMAS[0], databaseId: null, workloadType: 'oltp',
+    alias: '',
+    moduleName: '', dailyExecs: WORKLOAD_OPTIONS[0].defaultDaily, remark: '',
+    showMeta: false, tuningStep: 0, elapsed: 0,
+    resultItem: null, resultRate: 0, statusOverrides: {},
+  }
+}
+
+// ─── 세션 캐시 (페이지 이탈 후 복귀 시 상태 유지) ───
+let _sessionTabs: CanvasTab[] | null = null
+let _sessionActiveId: string | null = null
+
+// ═══════════════════════════════════════════════════
+// ─── CanvasPage ──────────────────────────────────
+// ═══════════════════════════════════════════════════
+export default function CanvasPage() {
+  const [tabs, setTabs] = useState<CanvasTab[]>(() => _sessionTabs ?? [freshTab()])
+  const [activeId, setActiveId] = useState(() => _sessionActiveId ?? '1')
+  const [targetTree, setTargetTree] = useState<TargetInstanceMeta[]>([])
+  useEffect(() => {
+    let aborted = false
+    fetch(`${TARGET_API_BASE}/api/targets/tree`)
+      .then(r => (r.ok ? r.json() : Promise.reject(r.statusText)))
+      .then((data: TargetInstanceMeta[]) => {
+        if (aborted || !Array.isArray(data) || data.length === 0) return
+        setTargetTree(data)
+        // 기존 탭들 중 instance/schema 가 fallback 상수값이면 첫 실제 값으로 대체
+        const firstInst = data[0]; const firstDb = firstInst.databases[0]
+        setTabs(prev => prev.map(t => {
+          const knownInst = data.find(i => i.instance_id === t.instance)
+          if (knownInst) return t  // 이미 유효
+          return { ...t, instance: firstInst.instance_id, databaseId: firstDb?.id ?? null, schema: firstDb?.schemas[0]?.schema_name ?? t.schema }
+        }))
+      })
+      .catch(() => { /* fallback 유지 */ })
+    return () => { aborted = true }
+  }, [])
+  const timersRef = useRef(new Map<string, ReturnType<typeof setInterval>>())
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const activeTab = tabs.find(t => t.id === activeId) ?? tabs[0]
+
+  // 세션 캐시 동기화
+  useEffect(() => {
+    _sessionTabs = tabs
+    _sessionActiveId = activeId
+  }, [tabs, activeId])
+
+  useEffect(() => {
+    return () => timersRef.current.forEach(t => clearInterval(t))
+  }, [])
+
+  useEffect(() => {
+    if (activeTab.phase === 'idle') {
+      setTimeout(() => textareaRef.current?.focus(), 50)
+    }
+  }, [activeId, activeTab.phase])
+
+  // 탭 부분 업데이트 헬퍼
+  const patch = (id: string, p: Partial<CanvasTab>) =>
+    setTabs(prev => prev.map(t => t.id === id ? { ...t, ...p } : t))
+
+  // ─── 제출 ─────────────────────────────────
+  const handleSubmit = () => {
+    const tab = activeTab
+    const trimmed = tab.sql.trim()
+    if (!trimmed || tab.phase !== 'idle') return
+
+    const sqlId = generateSqlId(trimmed)
+    const execCtx: 'OLTP' | 'Batch' = tab.workloadType === 'batch' ? 'Batch' : 'OLTP'
+
+    const { v1Id } = addNewWorkItem({
+      sqlId, sqlText: trimmed,
+      instanceName: tab.instance, schemaName: tab.schema,
+      source: 'v$sql', selectionSource: 'manual',
+      executionContext: execCtx,
+      estimatedDailyExec: parseInt(tab.dailyExecs) || 1000,
+      alias: tab.alias.trim(),
+    })
+
+    const tabId = tab.id
+    patch(tabId, { phase: 'tuning', sqlId, tuningStep: 0, elapsed: 0 })
+
+    const timer = setInterval(() => {
+      setTabs(prev => prev.map(t => t.id === tabId ? { ...t, elapsed: t.elapsed + 100 } : t))
+    }, 100)
+    timersRef.current.set(tabId, timer)
+
+    const stepDurations = [1200, 2000, 3500, 2500, 1000]
+    let acc = 0
+    stepDurations.forEach((dur, i) => {
+      acc += dur
+      if (i < stepDurations.length - 1) {
+        setTimeout(() => patch(tabId, { tuningStep: i + 1 }), acc)
+      } else {
+        setTimeout(() => {
+          const t = timersRef.current.get(tabId)
+          if (t) { clearInterval(t); timersRef.current.delete(tabId) }
+          const allItems = [...workItems, ...getNewV1Items()]
+          const item = allItems.find(w => w.id === v1Id)
+          if (item) {
+            generateMockResult(v1Id, trimmed, item)
+            const rec = workRecommendations[v1Id]
+            const rate = rec ? Math.abs(rec.plans[0]?.improvementRate ?? 0) : 0
+            patch(tabId, { phase: 'done', resultItem: item, resultRate: rate })
+          }
+        }, acc)
+      }
+    })
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
+
+  // ─── 탭 조작 ──────────────────────────────
+  const addTab = () => {
+    const t = freshTab()
+    setTabs(prev => [...prev, t])
+    setActiveId(t.id)
+  }
+
+  const closeTab = (id: string) => {
+    const timer = timersRef.current.get(id)
+    if (timer) { clearInterval(timer); timersRef.current.delete(id) }
+
+    const remaining = tabs.filter(t => t.id !== id)
+    if (remaining.length === 0) {
+      const t = freshTab()
+      setTabs([t])
+      setActiveId(t.id)
+    } else {
+      setTabs(remaining)
+      if (activeId === id) {
+        const idx = tabs.findIndex(t => t.id === id)
+        setActiveId(remaining[Math.min(idx, remaining.length - 1)].id)
+      }
+    }
+  }
+
+  // ─── 파생 ─────────────────────────────────
+  const showTabBar = tabs.length > 1 || tabs.some(t => t.phase !== 'idle')
+  const canSubmit = activeTab.sql.trim().length > 0 && activeTab.alias.trim().length > 0 && activeTab.phase === 'idle'
+  const getStatus = (w: WorkItem) => activeTab.statusOverrides[w.id] ?? w.status
+
+  // ═══ 렌더 ═══
+  return (
+    <div className="h-full flex flex-col">
+      {/* ── 탭 바 ── */}
+      {showTabBar && (
+        <div className="canvas-tabbar shrink-0 flex items-center border-b border-border bg-surface-alt">
+          <div className="flex-1 flex items-center overflow-x-auto">
+            {tabs.map(tab => {
+              const isActive = tab.id === activeId
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveId(tab.id)}
+                  className={`group relative flex items-center gap-2 px-4 py-2.5 text-xs border-b-2 transition-colors whitespace-nowrap ${
+                    isActive
+                      ? 'border-code text-text-primary bg-white font-semibold'
+                      : 'border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-muted'
+                  }`}
+                >
+                  {tab.phase === 'tuning' && (
+                    <span className="relative flex h-2 w-2 shrink-0">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-code opacity-50" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-code" />
+                    </span>
+                  )}
+                  {tab.phase === 'done' && <Check size={12} className="text-success shrink-0" />}
+                  {tab.phase === 'idle' && <SquarePen size={12} className="text-text-muted shrink-0" />}
+                  {tab.sqlId ? (
+                    <>
+                      <span className="font-mono font-semibold truncate max-w-[120px]">{tab.sqlId}</span>
+                      <span className="text-[10px] text-text-muted font-normal">{tab.instance}</span>
+                      {tab.phase === 'done' && tab.resultRate > 0 && (
+                        <span className="text-[10px] text-success font-bold tabular-nums">-{tab.resultRate}%</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="font-medium">새 요청</span>
+                  )}
+                  <span
+                    onClick={e => { e.stopPropagation(); closeTab(tab.id) }}
+                    className="p-0.5 rounded opacity-0 group-hover:opacity-100 text-text-muted hover:text-text-primary hover:bg-surface-muted transition-colors"
+                  >
+                    <X size={11} />
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <button
+            onClick={addTab}
+            className="canvas-tabbar-plus shrink-0 p-2 mx-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-muted transition-colors active:scale-[0.97]"
+            title="새 요청"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* ── 컨텐츠 ── */}
+      {activeTab.phase === 'done' && activeTab.resultItem ? (
+        <div className="flex-1 min-h-0">
+          <WorkbenchContent
+            item={activeTab.resultItem}
+            filteredItems={[activeTab.resultItem]}
+            getStatus={getStatus}
+            onItemSelect={() => {}}
+            onClose={() => closeTab(activeId)}
+            onStatusChange={(id, status) => patch(activeId, {
+              statusOverrides: { ...activeTab.statusOverrides, [id]: status },
+            })}
+            onReject={() => {}}
+            onShowToast={() => {}}
+            onConfirmAction={() => {}}
+            onDirectInputCreated={() => {}}
+            onNavigateToExisting={() => {}}
+            hideList
+            hideHeader
+          />
+        </div>
+
+      ) : activeTab.phase === 'tuning' ? (
+        /* ══ 튜닝 진행 ══ */
+        <div className="flex-1 flex flex-col items-center justify-center px-6">
+          <div className="w-full max-w-[480px] flex flex-col gap-4">
+
+            {/* SQL 미리보기 — 축소 */}
+            <div className="rounded-lg border border-border/60 bg-surface-alt px-4 py-3">
+              <pre className="font-mono text-[11px] text-text-secondary leading-[1.6] whitespace-pre-wrap line-clamp-3">{activeTab.sql}</pre>
+              <div className="flex items-center gap-1.5 mt-2.5 pt-2.5 border-t border-border/40 text-[10px] text-text-muted">
+                <Database size={10} className="shrink-0" />
+                <span>{activeTab.instance} / {activeTab.schema}</span>
+                <span>·</span>
+                <span>{WORKLOAD_OPTIONS.find(o => o.value === activeTab.workloadType)?.label}</span>
+              </div>
+            </div>
+
+            {/* 진행 카드 — TuningInProgressCard (작업상세 슬라이드패널과 동일) */}
+            <TuningInProgressCard
+              variant="narrow"
+              currentStep={Math.min(activeTab.tuningStep + 1, 5) as ProgressStepNumber}
+              elapsed={`${(activeTab.elapsed / 1000).toFixed(1)}s`}
+              stepDescription={TUNING_STEPS[activeTab.tuningStep]?.desc}
+            />
+          </div>
+        </div>
+
+      ) : (
+        /* ══ 입력 (idle) ══ */
+        <DirectInputIdle
+          sql={activeTab.sql}
+          sqlId={activeTab.sqlId}
+          instance={activeTab.instance}
+          schema={activeTab.schema}
+          instances={targetTree.length > 0 ? targetTree.map(t => t.instance_id) : INSTANCES}
+          schemas={(() => {
+            const inst = targetTree.find(t => t.instance_id === activeTab.instance)
+            const db = inst?.databases.find(d => d.id === activeTab.databaseId) ?? inst?.databases[0]
+            return db?.schemas.map(sc => sc.schema_name) ?? SCHEMAS
+          })()}
+          databases={(() => {
+            const inst = targetTree.find(t => t.instance_id === activeTab.instance)
+            return inst?.databases.map(d => ({ id: d.id, name: d.db_name, displayName: d.display_name })) ?? []
+          })()}
+          databaseId={activeTab.databaseId ?? null}
+          onDatabaseChange={id => {
+            const inst = targetTree.find(t => t.instance_id === activeTab.instance)
+            const db = inst?.databases.find(d => d.id === id)
+            patch(activeId, { databaseId: id, schema: db?.schemas[0]?.schema_name ?? activeTab.schema })
+          }}
+          canSubmit={canSubmit}
+          onSqlChange={v => patch(activeId, { sql: v })}
+          onSqlIdChange={v => patch(activeId, { sqlId: v })}
+          onInstanceChange={v => {
+            const inst = targetTree.find(t => t.instance_id === v)
+            const firstDb = inst?.databases[0]
+            patch(activeId, { instance: v, databaseId: firstDb?.id ?? null, schema: firstDb?.schemas[0]?.schema_name ?? activeTab.schema })
+          }}
+          onSchemaChange={v => patch(activeId, { schema: v })}
+          alias={activeTab.alias}
+          onAliasChange={v => patch(activeId, { alias: v })}
+          onSubmit={handleSubmit}
+        />
+      )}
+    </div>
+  )
+}

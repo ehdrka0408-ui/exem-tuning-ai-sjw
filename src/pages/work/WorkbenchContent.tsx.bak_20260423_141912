@@ -1,0 +1,1139 @@
+import { useState, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  ChevronLeft, ChevronRight, ArrowLeft, Maximize2, ExternalLink, X,
+  CheckCircle2, Undo2, XCircle, Ban, SquarePen, FileText, Copy, Check,
+  Braces, Play, Loader2, TrendingDown, TrendingUp, Equal,
+} from 'lucide-react'
+import type { ComponentType } from 'react'
+import type { WorkItem } from '../../mocks/workItems'
+import { workRecommendations } from '../../mocks/recommendations'
+import { workBindSets } from '../../mocks/executionValidation'
+import {
+  type DiffLine, DIFF_STYLES, DIFF_TEXT,
+  computeLineDiff, computePlanDiff, formatSQLText,
+} from '../../utils/sqlDiff'
+import Button from '../../components/common/Button'
+import DirectInputForm from '../../components/common/DirectInputForm'
+import {
+  AIRationale, BindSection, ApplyTab, HistoryTab, OpsEffectTab,
+  BeforeInfoSection, TuningProgressCard,
+  highlightSQL, PlanTable, PlanDiffTable,
+  TUNING_TYPE_COLORS,
+  wdFormatNumber, wdFormatMs, wdCalcChangeRate,
+} from './WorkDetailPanel'
+import CostSweepHero from '../../components/common/CostSweepHero'
+import {
+  BotMessageSquare, Clock, User, AlertCircle, Minus, CalendarClock,
+} from 'lucide-react'
+
+// ─── 상수 ─────────────────────────────────────────
+const STATUS_LABELS: Record<WorkItem['status'], string> = {
+  scheduled: '예약중',
+  pending: '튜닝대기',
+  tuning: '튜닝중',
+  approval_pending: '튜닝완료',
+  apply_pending: '반영대기',
+  applied: '반영완료',
+  rejected: '반려',
+  failed: '실패',
+  cancelled: '취소',
+  no_improve: '개선없음',
+}
+
+const STATUS_OWNER_ICON: Record<WorkItem['status'], ComponentType<{ className?: string; size?: number }>> = {
+  scheduled: CalendarClock,
+  pending: Clock,
+  tuning: BotMessageSquare,
+  approval_pending: BotMessageSquare,
+  apply_pending: User,
+  applied: CheckCircle2,
+  rejected: AlertCircle,
+  failed: AlertCircle,
+  cancelled: AlertCircle,
+  no_improve: Minus,
+}
+
+const STATUS_OWNER_ICON_COLOR: Record<WorkItem['status'], string> = {
+  scheduled: 'text-text-muted',
+  pending: 'text-text-muted',
+  tuning: 'text-code',
+  approval_pending: 'text-success',
+  apply_pending: 'text-info',
+  applied: 'text-success',
+  rejected: 'text-danger',
+  failed: 'text-danger',
+  cancelled: 'text-danger',
+  no_improve: 'text-text-muted',
+}
+
+function StatusIndicator({ status }: { status: WorkItem['status'] }) {
+  if (status === 'tuning') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-code">
+        <CostSweepHero size="xs" color="blue" animated className="shrink-0" />
+        {STATUS_LABELS[status]}
+      </span>
+    )
+  }
+  if (status === 'approval_pending') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-success">
+        <CostSweepHero size="xs" color="green" animated={false} className="shrink-0" />
+        {STATUS_LABELS[status]}
+      </span>
+    )
+  }
+  const Icon = STATUS_OWNER_ICON[status]
+  const iconColor = STATUS_OWNER_ICON_COLOR[status]
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${iconColor}`}>
+      <Icon size={14} />
+      {STATUS_LABELS[status]}
+    </span>
+  )
+}
+
+// ─── 타입 ─────────────────────────────────────────
+type WbScope = 'sql' | 'plan' | 'before' | 'after' | 'all'
+
+export interface WorkbenchContentProps {
+  item: WorkItem
+  filteredItems: WorkItem[]
+  getStatus: (item: WorkItem) => WorkItem['status']
+  onItemSelect: (item: WorkItem) => void
+  onClose: () => void
+  // Status change callbacks
+  onStatusChange: (id: string, status: WorkItem['status']) => void
+  onReject: (item: WorkItem) => void
+  onShowToast: (msg: string) => void
+  onConfirmAction: (action: { title: string; variant: 'warning' | 'danger'; message: string; onConfirm: () => void } | null) => void
+  // Direct input
+  onDirectInputCreated: (id: string) => void
+  onNavigateToExisting: (id: string) => void
+  /** 좌측 작업 목록 숨김 (도화지 결과 뷰 등) */
+  hideList?: boolean
+  /** 상단 헤더 바 숨김 (도화지 탭 바가 대체) */
+  hideHeader?: boolean
+}
+
+// ─── 메인 컴포넌트 ──────────────────────────────────
+export default function WorkbenchContent({
+  item,
+  filteredItems,
+  getStatus,
+  onItemSelect,
+  onClose,
+  onStatusChange,
+  onReject,
+  onShowToast,
+  onConfirmAction,
+  onDirectInputCreated,
+  onNavigateToExisting,
+  hideList: _hideList,
+  hideHeader: _hideHeader,
+}: WorkbenchContentProps) {
+  const navigate = useNavigate()
+  // ─── 로컬 상태 ───
+  const [wbListOpen, setWbListOpen] = useState(true) // 진입 시 펼침으로 시작
+  // 마운트 트랜지션: 사이드바가 넓은 상태에서 시작 → 목표 폭으로 압축 (최초 1회만)
+  const mountAnimDone = useRef(false)
+  const [sidebarReady, setSidebarReady] = useState(mountAnimDone.current)
+  useEffect(() => {
+    if (mountAnimDone.current) return
+    const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setSidebarReady(true)
+        mountAnimDone.current = true
+      })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  const [wbInfoOpen, setWbInfoOpen] = useState(true)
+  const [wbTab, setWbTab] = useState<'review' | 'apply' | 'ops' | 'history'>('review')
+  const [wbScope, setWbScope] = useState<WbScope>('all')
+  const [wbSingleTarget, setWbSingleTarget] = useState<'sql-before' | 'sql-after' | 'plan-before' | 'plan-after' | null>(null)
+  const [wbFormatted, setWbFormatted] = useState(true)
+  const [wbSqlDiff, setWbSqlDiff] = useState(false)
+  const [wbPlanDiff, setWbPlanDiff] = useState(false)
+  const [wbSplitPct, setWbSplitPct] = useState(40)
+  const [wbBindOpen, setWbBindOpen] = useState(false)
+  const [wbBindTestId, setWbBindTestId] = useState<string | null>(null)
+  const [wbBindTestResult, setWbBindTestResult] = useState<{ setId: string; elapsed: number; buffers: number; status: 'running' | 'done' | 'error' } | null>(null)
+  const [wbDirectInput, setWbDirectInput] = useState(false)
+  const wbSplitDragged = useRef(false)
+  const wbContainerRef = useRef<HTMLDivElement>(null)
+
+  // 아이템 변경 시 탭 리셋
+  useEffect(() => {
+    const st = getStatus(item)
+    const hasTuning = ['approval_pending', 'apply_pending', 'applied'].includes(st)
+    if (hasTuning) {
+      setWbTab('review')
+    } else {
+      setWbTab('review')
+    }
+    setWbSingleTarget(null)
+    setWbDirectInput(false)
+  }, [item.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── 파생 데이터 ───
+  const wbStatus = getStatus(item)
+  const wbRec = workRecommendations[item.id]
+  const wbPlan = wbRec?.plans?.[0] ?? null
+  const wbHasTuning = ['approval_pending', 'apply_pending', 'applied'].includes(wbStatus)
+  const wbPlans = wbRec?.plans ?? []
+  const wbSelectedPlan = wbPlan
+
+  return (
+    <div className="flex h-full overflow-hidden">
+      {/* ── 좌측 사이드바 (접기/펼치기 + 마운트 압축 트랜지션) ── */}
+      <div
+        className="shrink-0 border-r border-border flex flex-col overflow-hidden bg-white"
+        style={{
+          width: sidebarReady
+            ? (wbListOpen ? 260 : 48)
+            : Math.min(window.innerWidth * 0.55, 600),
+          transition: sidebarReady
+            ? 'width 200ms ease-out'
+            : 'width 350ms cubic-bezier(0.4, 0, 0.2, 1)',
+        }}
+      >
+        {wbListOpen ? (
+          /* ══ 펼침 모드 ══ */
+          <>
+            {/* 헤더 — 작업 목록 (N) | 접기 */}
+            <div className="flex items-center gap-2 px-3 h-[45px] shrink-0 border-b border-border">
+              <span className="text-xs font-medium text-text-secondary whitespace-nowrap">작업 목록</span>
+              <span className="text-[11px] text-text-muted tabular-nums">{filteredItems.length}</span>
+              <button
+                onClick={() => setWbListOpen(false)}
+                className="ml-auto p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-muted transition-colors"
+                title="목록 접기"
+              >
+                <ChevronLeft size={14} />
+              </button>
+            </div>
+
+            {/* 아이템 목록 — 2줄: sqlId+개선율 / workName or sqlText preview */}
+            <div className="flex-1 overflow-y-auto">
+              {filteredItems.map(fi => {
+                const st = getStatus(fi)
+                const isActive = fi.id === item.id
+                const changeRate = fi.originalElapsed && fi.tunedElapsed
+                  ? Math.round(((fi.originalElapsed - fi.tunedElapsed) / fi.originalElapsed) * 100)
+                  : null
+                const dotColor =
+                  st === 'tuning' ? 'bg-code' :
+                  st === 'approval_pending' ? 'bg-success' :
+                  st === 'apply_pending' ? 'bg-info' :
+                  st === 'applied' ? 'bg-success' :
+                  st === 'rejected' || st === 'failed' || st === 'cancelled' ? 'bg-danger' :
+                  'bg-text-muted'
+                const sqlPreview = fi.sqlText.replace(/\s+/g, ' ').trim().slice(0, 50)
+
+                return (
+                  <button
+                    key={fi.id}
+                    onClick={() => { onItemSelect(fi); setWbSingleTarget(null) }}
+                    className={`w-full text-left px-3 py-2 border-b border-border/30 transition-colors ${
+                      isActive
+                        ? 'bg-code-bg shadow-[inset_2px_0_0_0_var(--color-code)]'
+                        : 'hover:bg-surface-muted'
+                    }`}
+                  >
+                    {/* 1줄: dot + sqlId + 개선율 */}
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-[5px] h-[5px] rounded-sm shrink-0 ${dotColor}`} />
+                      <span className={`font-mono text-[11px] truncate min-w-0 flex-1 ${
+                        isActive ? 'text-code font-semibold' : 'text-text-primary'
+                      }`}>{fi.sqlId}</span>
+                      {changeRate !== null && changeRate > 0 && (
+                        <span className="text-[10px] font-medium text-success tabular-nums font-mono shrink-0">
+                          -{changeRate}%
+                        </span>
+                      )}
+                    </div>
+                    {/* 2줄: 인스턴스명 */}
+                    <p className="text-[10px] text-text-muted truncate mt-0.5 pl-[11px]">{fi.instanceName}</p>
+                    {/* 3줄: SQL TEXT 미리보기 */}
+                    <p className="text-[10px] text-text-muted/70 truncate mt-0.5 pl-[11px] font-mono">{sqlPreview}</p>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* 하단 — 직접입력 → /canvas 이동 */}
+            <div className="shrink-0 px-3 py-2 border-t border-border">
+              <button
+                onClick={() => navigate('/canvas')}
+                className="w-full inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors text-action hover:bg-code-bg"
+              >
+                <SquarePen size={14} />
+                사용자 SQL입력
+              </button>
+            </div>
+          </>
+        ) : (
+          /* ══ 접힘 모드 — 펼침과 동일 3-존 구조 (헤더 38px | 아이템 | 푸터) ══ */
+          <>
+            {/* 헤더 — > 펼치기만 (← 목록은 본문 헤더에 상시 표시) */}
+            <div className="flex items-center justify-center h-[45px] shrink-0 border-b border-border">
+              <button
+                onClick={() => setWbListOpen(true)}
+                className="w-7 h-7 flex items-center justify-center rounded-md border border-border text-text-muted hover:text-text-primary hover:bg-surface-muted transition-colors"
+                title="목록 펼치기"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+
+            {/* 아이템 — dot + sqlId 접두사 */}
+            <div className="flex-1 overflow-y-auto">
+              {filteredItems.map(fi => {
+                const st = getStatus(fi)
+                const isActive = fi.id === item.id
+                const dotColor =
+                  st === 'tuning' ? 'bg-code' :
+                  st === 'approval_pending' ? 'bg-success' :
+                  st === 'apply_pending' ? 'bg-info' :
+                  st === 'applied' ? 'bg-success' :
+                  st === 'rejected' || st === 'failed' || st === 'cancelled' ? 'bg-danger' :
+                  'bg-text-muted'
+                // sqlId 앞 2~3자 (의미 있는 접두사)
+                const prefix = fi.sqlId.replace(/[_\d]/g, '').slice(0, 3) || fi.sqlId.slice(0, 2)
+
+                return (
+                  <button
+                    key={fi.id}
+                    onClick={() => { onItemSelect(fi); setWbSingleTarget(null) }}
+                    title={`${fi.sqlId}`}
+                    className={`w-full flex flex-col items-center justify-center border-b border-border/30 transition-colors h-[38px] ${
+                      isActive
+                        ? 'bg-code-bg shadow-[inset_2px_0_0_0_var(--color-code)]'
+                        : 'hover:bg-surface-muted'
+                    }`}
+                  >
+                    <span className={`w-[5px] h-[5px] rounded-sm shrink-0 ${dotColor}`} />
+                    <span className={`text-[9px] font-semibold font-mono tabular-nums mt-0.5 ${
+                      isActive ? 'text-code' : 'text-text-muted'
+                    }`}>{prefix}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* 하단: 직접입력 → /canvas 이동 */}
+            <div className="shrink-0 py-2 border-t border-border flex flex-col items-center">
+              <button
+                onClick={() => navigate('/canvas')}
+                className="p-1.5 rounded-md text-action hover:bg-code-bg transition-colors"
+                title="사용자 SQL입력"
+              >
+                <SquarePen size={14} />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── 우측 워크벤치 영역 ── */}
+      <div className="flex-1 min-w-0 flex flex-col bg-white" style={{
+        opacity: sidebarReady ? 1 : 0,
+        transition: 'opacity 250ms ease-out 150ms',
+      }}>
+        {/* 직접입력 도화지 모드 */}
+        {wbDirectInput ? (
+          <div className="flex-1 overflow-y-auto p-6">
+            <DirectInputForm
+              onCreated={(id) => {
+                setWbDirectInput(false)
+                onDirectInputCreated(id)
+              }}
+              onNavigateToExisting={(id) => {
+                setWbDirectInput(false)
+                onNavigateToExisting(id)
+              }}
+            />
+          </div>
+        ) : (() => {
+        return <>
+        {/* 워크벤치 헤더 — ← 목록 항상 표시 */}
+        <div className="flex items-center gap-3 px-6 h-[45px] shrink-0 border-b border-border">
+          <button
+            onClick={onClose}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-surface-muted transition-colors"
+            title="목록으로 돌아가기"
+          >
+            <ArrowLeft size={13} />
+            <span>목록</span>
+          </button>
+          <div className="w-px h-4 bg-border" />
+          <span className="font-mono text-sm font-semibold text-text-primary">{item.sqlId}</span>
+          <div className="w-px h-4 bg-border" />
+          <StatusIndicator status={wbStatus} />
+          <span className="text-xs text-text-muted">{item.instanceName}</span>
+
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => window.open(`/work/${item.id}?popup=true`, '_blank')}
+              className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-muted transition-colors"
+              title="새 탭에서 열기"
+            >
+              <ExternalLink size={14} />
+            </button>
+          </div>
+        </div>
+
+        {/* 탭 — 튜닝 데이터 있을 때만 */}
+        {wbHasTuning && (
+          <div className="flex border-b border-border px-6 shrink-0">
+            {([
+              { key: 'review' as const, label: '검토' },
+              { key: 'apply' as const, label: '반영' },
+              { key: 'ops' as const, label: '운영효과' },
+              { key: 'history' as const, label: '이력' },
+            ]).map(t => (
+              <button
+                key={t.key}
+                onClick={() => setWbTab(t.key)}
+                className={`px-4 py-2 text-xs font-semibold transition-colors ${
+                  wbTab === t.key
+                    ? 'text-action border-b-2 border-action'
+                    : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* ═══ 검토 탭 — 좌 사이드 + 우 메인 ═══ */}
+        {(wbTab === 'review' || !wbHasTuning) && (
+          <div className="flex-1 flex min-h-0 overflow-hidden">
+            {/* 좌 사이드 — 상세 정보 (접기/펼치기) */}
+            <div className={`shrink-0 border-r border-border flex flex-col transition-[width] duration-300 ease-out overflow-hidden relative ${
+              wbInfoOpen ? 'w-[280px]' : 'w-8'
+            }`}>
+              {/* 접힘 스트립 */}
+              <div
+                onClick={() => !wbInfoOpen && setWbInfoOpen(true)}
+                className={`absolute inset-0 w-8 flex flex-col items-center z-10 transition-opacity duration-300 ${
+                  wbInfoOpen ? 'opacity-0 pointer-events-none' : 'opacity-100 bg-white hover:bg-surface-alt cursor-pointer'
+                }`}
+              >
+                <div className="mt-3 flex flex-col items-center gap-1.5">
+                  <ChevronRight size={11} className="text-text-muted" />
+                </div>
+                <span className="mt-2 text-[10px] font-medium text-text-muted tracking-wider" style={{ writingMode: 'vertical-rl' }}>상세 정보</span>
+              </div>
+              {/* 펼침 컨텐츠 */}
+              <div className="w-[280px] overflow-y-auto p-4 space-y-3">
+              <div className="flex items-center justify-between -mt-1 mb-1">
+                <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">상세 정보</span>
+                <button onClick={() => setWbInfoOpen(false)} className="p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-muted transition-colors" title="접기">
+                  <ChevronLeft size={12} />
+                </button>
+              </div>
+              {/* 메타 */}
+              <div className="text-[11px] text-text-muted space-y-0.5">
+                <p>{item.instanceName} · {item.schemaName} · {new Date(item.createdAt).toLocaleDateString('ko-KR')}</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="px-1 py-px rounded bg-surface-alt text-text-secondary font-medium">{item.source === 'maxgauge' ? 'MaxGauge' : item.source === 'awr' ? 'AWR' : 'V$SQL'}</span>
+                  {item.executionResult && (
+                    <span className={`px-1 py-px rounded text-[10px] font-medium ${
+                      item.executionResult === 'completed' ? 'bg-success-bg text-success' :
+                      item.executionResult === 'timeout' ? 'bg-warning-bg text-warning' :
+                      'bg-surface-alt text-text-secondary'
+                    }`}>{item.executionResult === 'completed' ? '실측' : item.executionResult === 'timeout' ? 'T/O' : '예상'}</span>
+                  )}
+                  {item.integrityResult === 'mismatch' && (
+                    <span className="px-1 py-px rounded bg-danger-bg text-danger text-[10px] font-medium">⚠ 불일치</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 메트릭 — 튜닝 데이터 있을 때 */}
+              {wbHasTuning && wbSelectedPlan && (
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <div className="grid grid-cols-2 divide-x divide-border">
+                    {[
+                      { label: 'Elapsed', orig: wbSelectedPlan.originalElapsed, tuned: wbSelectedPlan.tunedElapsed, fmt: wdFormatMs },
+                      { label: 'Buffer Gets', orig: wbSelectedPlan.originalBuffers, tuned: wbSelectedPlan.tunedBuffers, fmt: wdFormatNumber },
+                    ].map(m => {
+                      const { rate, improved } = wdCalcChangeRate(m.orig, m.tuned)
+                      return (
+                        <div key={m.label} className="px-3 py-2.5">
+                          <div className="text-[10px] text-text-muted font-medium mb-0.5">{m.label}</div>
+                          <div className="flex items-baseline gap-1">
+                            <span className="font-mono text-xs text-text-muted line-through">{m.fmt(m.orig)}</span>
+                            <span className="font-mono text-sm font-semibold text-text-primary">{m.fmt(m.tuned)}</span>
+                          </div>
+                          {rate !== 0 && (
+                            <span className={`text-[10px] font-semibold ${improved ? 'text-success' : 'text-danger'}`}>
+                              {improved ? '↓' : '↑'}{Math.abs(rate)}%
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Before 성능수치 — 튜닝 전 상태 */}
+              {!wbHasTuning && (wbStatus === 'pending' || wbStatus === 'tuning') && (
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <div className="grid grid-cols-2 divide-x divide-border">
+                    <div className="px-3 py-2.5">
+                      <div className="text-[10px] text-text-muted font-medium mb-0.5">Elapsed</div>
+                      <span className="font-mono text-sm font-semibold text-text-primary">{wdFormatMs(item.originalElapsed)}</span>
+                    </div>
+                    <div className="px-3 py-2.5">
+                      <div className="text-[10px] text-text-muted font-medium mb-0.5">Buffer Gets</div>
+                      <span className="font-mono text-sm font-semibold text-text-primary">{wdFormatNumber(item.originalBuffers)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 복수 튜닝안 (2개 이상) */}
+              {wbPlans.length > 1 && wbPlans.map((plan, pi) => (
+                <button
+                  key={plan.id}
+                  onClick={() => {/* TODO: plan 선택 */}}
+                  className={`w-full text-left rounded-lg p-2.5 transition-all ${
+                    plan.id === wbSelectedPlan?.id
+                      ? 'border-2 border-action shadow-sm'
+                      : 'border border-border opacity-70 hover:opacity-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-text-primary">{plan.label}</span>
+                      {pi === 0 && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-action text-white">추천</span>}
+                    </div>
+                    <span className="text-xs font-bold text-success">↓{Math.abs(plan.improvementRate)}%</span>
+                  </div>
+                  <div className="text-[10px] text-text-secondary">
+                    {plan.types.map(t => TUNING_TYPE_COLORS[t].label).join(' · ')}
+                  </div>
+                </button>
+              ))}
+
+              {/* AI 분석 근거 */}
+              {wbHasTuning && wbSelectedPlan && (
+                <AIRationale
+                  summary={wbSelectedPlan.summary}
+                  rationale={wbSelectedPlan.rationale}
+                  planMeta={wbPlans.length === 1 ? {
+                    types: wbSelectedPlan.types,
+                    improvementRate: wbSelectedPlan.improvementRate,
+                    verifyType: wbSelectedPlan.verifyType,
+                    hasIndex: wbSelectedPlan.types.includes('index'),
+                  } : undefined}
+                />
+              )}
+
+              {/* 바인드변수 */}
+              {wbHasTuning && wbSelectedPlan && (
+                <BindSection planBindSetId={wbSelectedPlan.bindSetId} workItemId={item.id} />
+              )}
+
+              {/* 튜닝중 프로그레스 */}
+              {wbStatus === 'tuning' && (
+                <TuningProgressCard item={item} onCancel={() => {
+                  onConfirmAction({
+                    title: '튜닝 중단', variant: 'danger',
+                    message: `${item.sqlId}\n진행 중인 튜닝을 중단하시겠습니까?`,
+                    onConfirm: () => {
+                      onStatusChange(item.id, 'cancelled')
+                      onConfirmAction(null)
+                    },
+                  })
+                }} />
+              )}
+
+              {/* 비정상 상태 카드 */}
+              {wbStatus === 'rejected' && item.rejectedReason && (
+                <div className="bg-danger-bg border border-danger rounded-lg p-3">
+                  <div className="text-xs font-semibold text-danger mb-1">반려 사유</div>
+                  <p className="text-xs text-danger">{item.rejectedReason}</p>
+                </div>
+              )}
+              {item.tuningError && (
+                <div className="bg-danger-bg border border-danger/40 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-danger mb-1"><XCircle className="h-3.5 w-3.5" />튜닝 실패</div>
+                  <p className="text-xs text-danger">{item.tuningError}</p>
+                </div>
+              )}
+              {item.applyError && (
+                <div className="bg-danger-bg border border-danger/40 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-danger mb-1"><XCircle className="h-3.5 w-3.5" />반영 실패</div>
+                  <p className="text-xs text-danger">{item.applyError}</p>
+                </div>
+              )}
+              {wbStatus === 'no_improve' && (
+                <div className="bg-surface-alt border border-border rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary mb-1"><Ban className="h-3.5 w-3.5" />개선없음</div>
+                  <p className="text-xs text-text-secondary">{item.cancelReason ?? 'AI 분석 완료 — 추가 개선 여지가 없습니다.'}</p>
+                </div>
+              )}
+              {wbStatus === 'cancelled' && item.cancelReason && (
+                <div className="bg-warning-bg border border-warning/40 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-warning mb-1"><Ban className="h-3.5 w-3.5" />취소 사유</div>
+                  <p className="text-xs text-text-secondary">{item.cancelReason}</p>
+                </div>
+              )}
+
+              {/* 액션 버튼 */}
+              {wbStatus === 'approval_pending' && (
+                <div className="space-y-2 pt-2 border-t border-border">
+                  <Button size="sm" className="w-full" onClick={() => {
+                    onStatusChange(item.id, 'apply_pending')
+                    setWbTab('apply')
+                  }}>
+                    <CheckCircle2 size={13} className="mr-1" /> 확인
+                  </Button>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="secondary" className="flex-1" onClick={() => {
+                      onStatusChange(item.id, 'pending')
+                      onShowToast(`${item.sqlId} — 재튜닝 요청`)
+                    }}>
+                      <Undo2 size={13} className="mr-1" /> 재튜닝
+                    </Button>
+                    <Button size="sm" variant="danger" className="flex-1" onClick={() => {
+                      onReject(item)
+                    }}>
+                      <XCircle size={13} className="mr-1" /> 반려
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+            </div>
+
+            {/* 우 메인: 인라인 비교 뷰 또는 Before 정보 */}
+            <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+              {wbHasTuning && wbSelectedPlan ? (() => {
+                const fmtOrig = wbFormatted ? formatSQLText(item.sqlText) : item.sqlText
+                const fmtTuned = wbFormatted ? formatSQLText(wbSelectedPlan.tunedSqlText || item.sqlText) : (wbSelectedPlan.tunedSqlText || item.sqlText)
+                const sqlDiff = computeLineDiff(fmtOrig, fmtTuned)
+                const planDiff = computePlanDiff(wbSelectedPlan.originalPlanText, wbSelectedPlan.tunedPlanText)
+
+                const showSql = wbSingleTarget ? wbSingleTarget.startsWith('sql') : wbScope !== 'plan'
+                const showPlan = wbSingleTarget ? wbSingleTarget.startsWith('plan') : wbScope !== 'sql'
+
+                const WbCopy = ({ text }: { text: string }) => {
+                  const [copied, setCopied] = useState(false)
+                  return (
+                    <button onClick={() => { navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
+                      className="p-1 rounded text-text-muted hover:text-text-secondary hover:bg-surface-muted transition-colors" title="Copy">
+                      {copied ? <Check size={11} /> : <Copy size={11} />}
+                    </button>
+                  )
+                }
+
+                const renderSql = (label: string, text: string, diffLines: DiffLine[], target?: 'sql-before' | 'sql-after') => (
+                  <div className="flex flex-col bg-white overflow-hidden min-h-0">
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-surface-muted shrink-0">
+                      <div className="w-0.5 h-3.5 rounded-full bg-border shrink-0" />
+                      <span className="text-[11px] font-semibold text-text-secondary">{label}</span>
+                      <div className="flex items-center gap-0.5 ml-auto">
+                        <WbCopy text={text} />
+                        {target && !wbSingleTarget && (
+                          <button onClick={() => setWbSingleTarget(target)} className="p-1 rounded text-text-muted hover:text-text-secondary hover:bg-surface-muted transition-colors" title="전체 보기">
+                            <Maximize2 size={11} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-auto p-3">
+                      {wbSqlDiff ? (
+                        <div className="text-xs font-mono leading-relaxed">
+                          {diffLines.map((line, i) => (
+                            <div key={i} className={`px-1 -mx-1 rounded-sm whitespace-pre-wrap ${DIFF_STYLES[line.type]}`}>
+                              <span className={DIFF_TEXT[line.type]}>{line.type === 'equal' ? highlightSQL(line.text) : line.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <pre className="text-xs font-mono whitespace-pre-wrap text-text-primary">{highlightSQL(text)}</pre>
+                      )}
+                    </div>
+                  </div>
+                )
+
+                const renderPlan = (label: string, text: string, diffLines: DiffLine[], target?: 'plan-before' | 'plan-after') => (
+                  <div className="flex flex-col bg-white overflow-hidden min-h-0">
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-surface-muted shrink-0">
+                      <div className="w-0.5 h-3.5 rounded-full bg-border shrink-0" />
+                      <span className="text-[11px] font-semibold text-text-secondary">{label}</span>
+                      <div className="flex items-center gap-0.5 ml-auto">
+                        <WbCopy text={text} />
+                        {target && !wbSingleTarget && (
+                          <button onClick={() => setWbSingleTarget(target)} className="p-1 rounded text-text-muted hover:text-text-secondary hover:bg-surface-muted transition-colors" title="전체 보기">
+                            <Maximize2 size={11} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-auto p-3">
+                      {wbPlanDiff ? <PlanDiffTable lines={diffLines} /> : <PlanTable text={text} />}
+                    </div>
+                  </div>
+                )
+
+                const renderDivider = () => (
+                  <div
+                    className="h-1.5 shrink-0 flex items-center justify-center cursor-row-resize hover:bg-surface-muted bg-surface-alt border-y border-border transition-colors group select-none"
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      wbSplitDragged.current = true
+                      const startY = e.clientY, startPct = wbSplitPct
+                      const container = wbContainerRef.current
+                      if (!container) return
+                      const move = (ev: MouseEvent) => { setWbSplitPct(Math.max(10, Math.min(80, startPct + ((ev.clientY - startY) / container.clientHeight) * 100))) }
+                      const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+                      document.addEventListener('mousemove', move)
+                      document.addEventListener('mouseup', up)
+                    }}
+                  >
+                    <div className="w-8 h-[2px] rounded-full bg-border group-hover:bg-text-muted transition-colors" />
+                  </div>
+                )
+
+                // 스코프 바 + 컨트롤
+                const SCOPE_ITEMS: { key: WbScope; label: string }[][] = [
+                  [{ key: 'sql', label: 'SQL' }, { key: 'plan', label: 'Plan' }],
+                  [{ key: 'before', label: 'Before' }, { key: 'after', label: 'After' }],
+                  [{ key: 'all', label: 'All' }],
+                ]
+                const SINGLE_LABELS: Record<string, string> = {
+                  'sql-before': 'SQL — Before', 'sql-after': 'SQL — After',
+                  'plan-before': 'Plan — Before', 'plan-after': 'Plan — After',
+                }
+
+                return <>
+                  {/* 스코프 바 */}
+                  <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border shrink-0 bg-surface">
+                    <div className="flex items-center gap-3">
+                      {SCOPE_ITEMS.map((group, gi) => (
+                        <div key={gi} className="flex items-center gap-0.5">
+                          {group.map(s => (
+                            <button
+                              key={s.key}
+                              onClick={() => { setWbSingleTarget(null); setWbScope(s.key) }}
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                                !wbSingleTarget && wbScope === s.key ? 'bg-action text-white' : 'text-text-secondary hover:bg-surface-muted'
+                              }`}
+                            >
+                              {s.label}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                    {wbSingleTarget && (
+                      <div className="flex items-center gap-1.5 ml-1">
+                        <div className="w-px h-4 bg-border" />
+                        <span className="text-[11px] font-medium text-text-primary">{SINGLE_LABELS[wbSingleTarget]}</span>
+                        <button onClick={() => setWbSingleTarget(null)} className="p-0.5 rounded text-text-muted hover:text-text-secondary hover:bg-surface-muted transition-colors" title="돌아가기">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )}
+                    {(wbSqlDiff || wbPlanDiff) && !wbSingleTarget && (
+                      <div className="flex items-center gap-2 ml-1 text-[10px] text-text-muted">
+                        <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-sm bg-amber-100 border border-amber-300" />변경</span>
+                        <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-sm bg-emerald-100 border border-emerald-300" />추가</span>
+                        <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-sm bg-red-100 border border-red-300" />삭제</span>
+                      </div>
+                    )}
+                    <div className="ml-auto flex items-center gap-1">
+                      {showSql && (
+                        <button
+                          onClick={() => setWbFormatted(f => !f)}
+                          className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${wbFormatted ? 'bg-code-bg text-code' : 'text-text-muted hover:bg-surface-muted hover:text-text-secondary'}`}
+                        >
+                          <FileText size={11} /> Format
+                        </button>
+                      )}
+                      {!wbSingleTarget && showSql && (
+                        <button
+                          onClick={() => setWbSqlDiff(d => !d)}
+                          className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${wbSqlDiff ? 'bg-code-bg text-code' : 'text-text-muted hover:bg-surface-muted hover:text-text-secondary'}`}
+                        >
+                          SQL Diff
+                        </button>
+                      )}
+                      {!wbSingleTarget && showPlan && (
+                        <button
+                          onClick={() => setWbPlanDiff(d => !d)}
+                          className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${wbPlanDiff ? 'bg-code-bg text-code' : 'text-text-muted hover:bg-surface-muted hover:text-text-secondary'}`}
+                        >
+                          Plan Diff
+                        </button>
+                      )}
+                      {(() => {
+                        const bindData = workBindSets[item.id]
+                        return bindData && bindData.sets.length > 0 ? (
+                          <>
+                            <div className="w-px h-4 bg-border" />
+                            <button
+                              onClick={() => setWbBindOpen(b => !b)}
+                              className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                                wbBindOpen ? 'bg-code-bg text-code' : 'text-text-muted hover:bg-surface-muted hover:text-text-secondary'
+                              }`}
+                              title="바인드 변수"
+                            >
+                              <Braces size={11} /> 바인드
+                            </button>
+                          </>
+                        ) : null
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* 비교 콘텐츠 */}
+                  <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">
+                    {/* 단일 패널 드릴다운 */}
+                    {wbSingleTarget ? (
+                      <div className="flex-1 min-h-0 overflow-hidden">
+                        {wbSingleTarget === 'sql-before' && renderSql('SQL — Before', fmtOrig, sqlDiff.leftLines)}
+                        {wbSingleTarget === 'sql-after' && renderSql('SQL — After', fmtTuned, sqlDiff.rightLines)}
+                        {wbSingleTarget === 'plan-before' && renderPlan('Plan — Before', wbSelectedPlan.originalPlanText, planDiff.leftLines)}
+                        {wbSingleTarget === 'plan-after' && renderPlan('Plan — After', wbSelectedPlan.tunedPlanText, planDiff.rightLines)}
+                      </div>
+                    ) : wbScope === 'sql' ? (
+                      <div className="flex-1 grid grid-cols-2 min-h-0 divide-x divide-border">
+                        {renderSql('Before', fmtOrig, sqlDiff.leftLines, 'sql-before')}
+                        {renderSql('After', fmtTuned, sqlDiff.rightLines, 'sql-after')}
+                      </div>
+                    ) : wbScope === 'plan' ? (
+                      <div className="flex-1 grid grid-cols-2 min-h-0 divide-x divide-border">
+                        {renderPlan('Before', wbSelectedPlan.originalPlanText, planDiff.leftLines, 'plan-before')}
+                        {renderPlan('After', wbSelectedPlan.tunedPlanText, planDiff.rightLines, 'plan-after')}
+                      </div>
+                    ) : wbScope === 'before' ? (
+                      <div ref={wbContainerRef} className="flex-1 flex flex-col min-h-0">
+                        <div className="flex flex-col shrink-0 overflow-hidden" style={{ height: `${wbSplitPct}%`, minHeight: 60 }}>
+                          {renderSql('SQL', fmtOrig, sqlDiff.leftLines, 'sql-before')}
+                        </div>
+                        {renderDivider()}
+                        <div className="flex flex-col flex-1 overflow-hidden" style={{ minHeight: 60 }}>
+                          {renderPlan('Plan', wbSelectedPlan.originalPlanText, planDiff.leftLines, 'plan-before')}
+                        </div>
+                      </div>
+                    ) : wbScope === 'after' ? (
+                      <div ref={wbContainerRef} className="flex-1 flex flex-col min-h-0">
+                        <div className="flex flex-col shrink-0 overflow-hidden" style={{ height: `${wbSplitPct}%`, minHeight: 60 }}>
+                          {renderSql('SQL', fmtTuned, sqlDiff.rightLines, 'sql-after')}
+                        </div>
+                        {renderDivider()}
+                        <div className="flex flex-col flex-1 overflow-hidden" style={{ minHeight: 60 }}>
+                          {renderPlan('Plan', wbSelectedPlan.tunedPlanText, planDiff.rightLines, 'plan-after')}
+                        </div>
+                      </div>
+                    ) : (
+                      /* all — 4-패널 */
+                      <div ref={wbContainerRef} className="flex-1 flex flex-col min-h-0">
+                        <div className="flex flex-col shrink-0" style={{ height: `${wbSplitPct}%`, minHeight: 60 }}>
+                          <div className="flex items-center gap-1.5 px-3 py-1 shrink-0 border-b border-border">
+                            <div className="w-0.5 h-3.5 rounded-full bg-text-muted shrink-0" />
+                            <span className="text-[11px] font-semibold text-text-secondary uppercase">SQL</span>
+                          </div>
+                          <div className="flex-1 grid grid-cols-2 overflow-hidden divide-x divide-border" style={{ minHeight: 0 }}>
+                            {renderSql('Before', fmtOrig, sqlDiff.leftLines, 'sql-before')}
+                            {renderSql('After', fmtTuned, sqlDiff.rightLines, 'sql-after')}
+                          </div>
+                        </div>
+                        {renderDivider()}
+                        <div className="flex flex-col flex-1" style={{ minHeight: 60, overflow: 'hidden' }}>
+                          <div className="flex items-center gap-1.5 px-3 py-1 shrink-0 border-b border-border">
+                            <div className="w-0.5 h-3.5 rounded-full bg-text-muted shrink-0" />
+                            <span className="text-[11px] font-semibold text-text-secondary uppercase">Plan</span>
+                          </div>
+                          <div className="flex-1 grid grid-cols-2 overflow-hidden divide-x divide-border" style={{ minHeight: 0 }}>
+                            {renderPlan('Before', wbSelectedPlan.originalPlanText, planDiff.leftLines, 'plan-before')}
+                            {renderPlan('After', wbSelectedPlan.tunedPlanText, planDiff.rightLines, 'plan-after')}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 바인드 변수 오버레이 패널 */}
+                    {wbBindOpen && (() => {
+                      const bindData = workBindSets[item.id]
+                      if (!bindData || bindData.sets.length === 0) return null
+                      const sets = bindData.sets
+                      const varNames = sets[0]?.variables.map(v => v.name) || []
+                      const sortedVars = varNames.map(name => {
+                        const vals = new Set(sets.map(s => s.variables.find(v => v.name === name)?.value || ''))
+                        return { name, unique: vals.size }
+                      }).sort((a, b) => b.unique - a.unique)
+                      const usedId = wbSelectedPlan?.bindSetId
+                      const fmtTime = (iso: string) => {
+                        const d = new Date(iso)
+                        return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                      }
+                      // mock 실행 함수
+                      const handleBindTest = (setId: string) => {
+                        setWbBindTestId(setId)
+                        setWbBindTestResult({ setId, elapsed: 0, buffers: 0, status: 'running' })
+                        setTimeout(() => {
+                          const baseE = wbSelectedPlan?.tunedElapsed || 120
+                          const baseB = wbSelectedPlan?.tunedBuffers || 5000
+                          const factor = 0.7 + Math.random() * 0.6
+                          setWbBindTestResult({
+                            setId,
+                            elapsed: Math.round(baseE * factor),
+                            buffers: Math.round(baseB * factor),
+                            status: 'done',
+                          })
+                        }, 1500)
+                      }
+                      const aiElapsed = wbSelectedPlan?.tunedElapsed || 0
+                      const aiBuffers = wbSelectedPlan?.tunedBuffers || 0
+                      const origElapsed = wbSelectedPlan?.originalElapsed || 0
+                      const origBuffers = wbSelectedPlan?.originalBuffers || 0
+
+                      return (
+                        <div className="absolute right-0 top-0 bottom-0 w-[460px] max-w-[65%] flex flex-col bg-white border-l border-border shadow-lg z-20 animate-[slideInRight_150ms_ease-out]">
+                          {/* 헤더 */}
+                          <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
+                            <Braces size={14} className="text-code shrink-0" />
+                            <span className="text-[12px] font-semibold text-text-primary">바인드 변수 시계열</span>
+                            <span className="text-[10px] text-text-muted">{sets.length}세트 · {sortedVars.length}변수</span>
+                            <div className="flex items-center gap-1.5 ml-auto mr-1 text-[10px] text-text-muted">
+                              <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-sm bg-code-bg border border-code/30" />AI 테스트</span>
+                              <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-sm bg-warning-bg border border-warning/30" />값 변동</span>
+                            </div>
+                            <button onClick={() => setWbBindOpen(false)} className="p-1 rounded text-text-muted hover:bg-surface-muted hover:text-text-secondary transition-colors">
+                              <X size={14} />
+                            </button>
+                          </div>
+
+                          {/* 피벗 테이블 */}
+                          <div className="flex-1 overflow-auto min-h-0">
+                            <table className="text-xs font-mono border-collapse min-w-max">
+                              <thead className="sticky top-0 z-10 bg-white">
+                                <tr>
+                                  <th className="sticky left-0 z-20 bg-surface-alt px-3 py-1.5 text-left text-[10px] font-semibold text-text-secondary border-b border-r border-border whitespace-nowrap">변수명</th>
+                                  {sets.map(set => {
+                                    const isUsed = set.id === usedId
+                                    const isTesting = wbBindTestId === set.id
+                                    return (
+                                      <th key={set.id} className={`px-2.5 py-1.5 text-center text-[10px] font-medium border-b border-border whitespace-nowrap ${
+                                        isTesting ? 'bg-info-bg text-info' : isUsed ? 'bg-code-bg text-code' : 'bg-surface-alt text-text-secondary'
+                                      }`}>
+                                        <div>{fmtTime(set.capturedAt)}</div>
+                                        <div className={`text-[9px] ${isUsed ? 'text-code/70' : 'text-text-muted'}`}>
+                                          {set.source}{isUsed ? ' ★ AI 테스트' : ''}
+                                        </div>
+                                      </th>
+                                    )
+                                  })}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sortedVars.map(({ name, unique }) => {
+                                  const isVariable = unique > 1
+                                  const usedVal = sets.find(s => s.id === usedId)?.variables.find(x => x.name === name)?.value || ''
+                                  return (
+                                    <tr key={name} className={`border-b border-surface-muted ${isVariable ? '' : 'opacity-50'}`}>
+                                      <td className={`sticky left-0 z-10 px-3 py-1 border-r border-border whitespace-nowrap font-medium ${isVariable ? 'bg-warning-bg/30 text-text-primary' : 'bg-surface-alt text-text-muted'}`}>
+                                        {name}{isVariable && <span className="ml-1 text-[9px] text-warning">{unique}</span>}
+                                      </td>
+                                      {sets.map(set => {
+                                        const val = set.variables.find(x => x.name === name)?.value || ''
+                                        const isUsedSet = set.id === usedId
+                                        const isTesting = wbBindTestId === set.id
+                                        const isDiff = isVariable && val !== usedVal
+                                        return (
+                                          <td key={set.id} className={`px-2.5 py-1 text-center whitespace-nowrap ${
+                                            isTesting ? 'bg-info-bg/30' : isUsedSet ? 'bg-code-bg/30' : isDiff ? 'bg-warning-bg/40 text-warning font-medium' : ''
+                                          }`}>
+                                            {val}
+                                          </td>
+                                        )
+                                      })}
+                                    </tr>
+                                  )
+                                })}
+                                {/* 실행 버튼 행 */}
+                                <tr className="border-t border-border">
+                                  <td className="sticky left-0 z-10 px-3 py-2 border-r border-border bg-surface-alt text-[10px] font-semibold text-text-secondary whitespace-nowrap">
+                                    실행 테스트
+                                  </td>
+                                  {sets.map(set => {
+                                    const isUsed = set.id === usedId
+                                    const isTesting = wbBindTestId === set.id
+                                    return (
+                                      <td key={set.id} className={`px-2.5 py-2 text-center ${isTesting ? 'bg-info-bg/30' : isUsed ? 'bg-code-bg/30' : ''}`}>
+                                        {isUsed ? (
+                                          <span className="text-[9px] text-code font-medium">기준 세트</span>
+                                        ) : (
+                                          <button
+                                            onClick={() => handleBindTest(set.id)}
+                                            disabled={wbBindTestResult?.status === 'running'}
+                                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${
+                                              isTesting && wbBindTestResult?.status === 'running'
+                                                ? 'bg-info text-white cursor-wait'
+                                                : isTesting && wbBindTestResult?.status === 'done'
+                                                ? 'bg-success text-white'
+                                                : 'bg-surface-muted text-text-secondary hover:bg-action hover:text-white'
+                                            }`}
+                                            title="이 바인드로 튜닝안 실행해보기"
+                                          >
+                                            {isTesting && wbBindTestResult?.status === 'running'
+                                              ? <><Loader2 size={10} className="animate-spin" /> 실행중...</>
+                                              : isTesting && wbBindTestResult?.status === 'done'
+                                              ? <><Check size={10} /> 완료</>
+                                              : <><Play size={10} /> 실행</>
+                                            }
+                                          </button>
+                                        )}
+                                      </td>
+                                    )
+                                  })}
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* 실행 결과 비교 패널 */}
+                          {wbBindTestResult && wbBindTestResult.status === 'done' && (() => {
+                            const testSet = sets.find(s => s.id === wbBindTestResult.setId)
+                            const testE = wbBindTestResult.elapsed
+                            const testB = wbBindTestResult.buffers
+                            const eVsAi = aiElapsed > 0 ? Math.round((testE - aiElapsed) / aiElapsed * 100) : 0
+                            const bVsAi = aiBuffers > 0 ? Math.round((testB - aiBuffers) / aiBuffers * 100) : 0
+                            const eVsOrig = origElapsed > 0 ? Math.round((testE - origElapsed) / origElapsed * 100) : 0
+                            const bVsOrig = origBuffers > 0 ? Math.round((testB - origBuffers) / origBuffers * 100) : 0
+                            const TrendIcon = ({ pct }: { pct: number }) => pct < -5 ? <TrendingDown size={11} className="text-success" /> : pct > 5 ? <TrendingUp size={11} className="text-danger" /> : <Equal size={11} className="text-text-muted" />
+                            const pctLabel = (pct: number) => <span className={`text-[10px] font-semibold ${pct < -5 ? 'text-success' : pct > 5 ? 'text-danger' : 'text-text-muted'}`}>{pct > 0 ? '+' : ''}{pct}%</span>
+
+                            return (
+                              <div className="shrink-0 border-t border-border bg-surface">
+                                <div className="px-4 py-2.5">
+                                  <div className="flex items-center gap-2 mb-2.5">
+                                    <Play size={12} className="text-info" />
+                                    <span className="text-[11px] font-semibold text-text-primary">바인드 실행 결과</span>
+                                    <span className="text-[10px] text-text-muted">{testSet ? fmtTime(testSet.capturedAt) : ''} 세트</span>
+                                  </div>
+
+                                  {/* 3열 비교: Before → AI테스트 → 이 바인드 */}
+                                  <div className="grid grid-cols-3 gap-2 text-center">
+                                    <div className="rounded-lg border border-border bg-white px-2 py-2">
+                                      <div className="text-[9px] text-text-muted font-medium mb-1">Before (원본)</div>
+                                      <div className="font-mono text-xs text-text-secondary">{wdFormatMs(origElapsed)}</div>
+                                      <div className="font-mono text-[10px] text-text-muted">{wdFormatNumber(origBuffers)} buf</div>
+                                    </div>
+                                    <div className="rounded-lg border border-code/30 bg-code-bg px-2 py-2">
+                                      <div className="text-[9px] text-code font-medium mb-1">AI 테스트 ★</div>
+                                      <div className="font-mono text-xs text-text-primary font-semibold">{wdFormatMs(aiElapsed)}</div>
+                                      <div className="font-mono text-[10px] text-text-muted">{wdFormatNumber(aiBuffers)} buf</div>
+                                    </div>
+                                    <div className="rounded-lg border border-info/30 bg-info-bg px-2 py-2">
+                                      <div className="text-[9px] text-info font-medium mb-1">이 바인드</div>
+                                      <div className="font-mono text-xs text-text-primary font-semibold">{wdFormatMs(testE)}</div>
+                                      <div className="font-mono text-[10px] text-text-muted">{wdFormatNumber(testB)} buf</div>
+                                    </div>
+                                  </div>
+
+                                  {/* 변화율 요약 */}
+                                  <div className="mt-2 flex gap-3">
+                                    <div className="flex-1 flex items-center justify-between rounded border border-border bg-white px-2.5 py-1.5">
+                                      <span className="text-[10px] text-text-muted">vs Before</span>
+                                      <div className="flex items-center gap-1">
+                                        <TrendIcon pct={eVsOrig} />
+                                        {pctLabel(eVsOrig)}
+                                        <span className="text-[9px] text-text-muted ml-1">elapsed</span>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <TrendIcon pct={bVsOrig} />
+                                        {pctLabel(bVsOrig)}
+                                        <span className="text-[9px] text-text-muted ml-1">buf</span>
+                                      </div>
+                                    </div>
+                                    <div className="flex-1 flex items-center justify-between rounded border border-border bg-white px-2.5 py-1.5">
+                                      <span className="text-[10px] text-text-muted">vs AI ★</span>
+                                      <div className="flex items-center gap-1">
+                                        <TrendIcon pct={eVsAi} />
+                                        {pctLabel(eVsAi)}
+                                        <span className="text-[9px] text-text-muted ml-1">elapsed</span>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <TrendIcon pct={bVsAi} />
+                                        {pctLabel(bVsAi)}
+                                        <span className="text-[9px] text-text-muted ml-1">buf</span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* 판정 메시지 */}
+                                  <div className={`mt-2 px-3 py-1.5 rounded text-[11px] font-medium ${
+                                    eVsOrig < -10 ? 'bg-success-bg text-success' : eVsOrig > 10 ? 'bg-danger-bg text-danger' : 'bg-surface-alt text-text-secondary'
+                                  }`}>
+                                    {eVsOrig < -10
+                                      ? `이 바인드에서도 ${Math.abs(eVsOrig)}% 개선 — 튜닝 효과 유효`
+                                      : eVsOrig > 10
+                                      ? `⚠ 이 바인드에서는 ${eVsOrig}% 악화 — 바인드 감도 확인 필요`
+                                      : '이 바인드에서 성능 차이 미미 — 추가 검토 권장'
+                                    }
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })()}
+
+                          {/* 실행 중 로딩 */}
+                          {wbBindTestResult?.status === 'running' && (
+                            <div className="shrink-0 border-t border-border bg-surface px-4 py-4 flex items-center justify-center gap-2 text-[11px] text-text-muted">
+                              <Loader2 size={14} className="animate-spin text-info" />
+                              튜닝안을 선택한 바인드로 실행 중...
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                </>
+              })() : (
+                /* Before 정보 — pending/tuning 등 */
+                <div className="flex-1 overflow-y-auto p-4">
+                  <BeforeInfoSection item={item} wide />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ═══ 반영 탭 ═══ */}
+        {wbTab === 'apply' && wbHasTuning && wbSelectedPlan && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <ApplyTab item={item} selectedPlan={wbSelectedPlan} />
+          </div>
+        )}
+
+        {/* ═══ 운영효과 탭 ═══ */}
+        {wbTab === 'ops' && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <OpsEffectTab item={item} onAfterSqlFound={() => {}} />
+          </div>
+        )}
+
+        {/* ═══ 이력 탭 ═══ */}
+        {wbTab === 'history' && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <HistoryTab workItemId={item.id} />
+          </div>
+        )}
+        </>
+        })()}
+      </div>
+    </div>
+  )
+}

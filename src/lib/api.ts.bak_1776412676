@@ -1,0 +1,53 @@
+const BASE = import.meta.env.VITE_API_BASE || 'http://10.10.45.119:8000'
+
+export interface TuningCaseSummary {
+  id: number
+  title: string | null
+  category: string | null
+  sql_id: string | null
+  schema_name: string | null
+  instance_name: string | null
+  status: string
+  owner: string
+  source: string
+  created_at: string
+}
+
+export interface PlanRow {
+  id: number
+  phase: string
+  plan_hash: string | null
+  plan_text: string
+  cost: number | null
+  elapsed_ms: number | null
+  buffers: number | null
+  note: string | null
+}
+
+export interface BindVariable {
+  id: number
+  name: string
+  data_type: string
+  value: string | null
+  position: number | null
+}
+
+export interface TuningCaseDetail extends TuningCaseSummary {
+  sql_text: string
+  tuned_sql_text: string | null
+  rationale: string | null
+  plans: PlanRow[]
+  bind_variables: BindVariable[]
+}
+
+export async function fetchCases(): Promise<TuningCaseSummary[]> {
+  const r = await fetch(`${BASE}/api/cases`)
+  if (!r.ok) throw new Error(`fetchCases failed: ${r.status}`)
+  return r.json()
+}
+
+export async function fetchCase(id: number): Promise<TuningCaseDetail> {
+  const r = await fetch(`${BASE}/api/cases/${id}`)
+  if (!r.ok) throw new Error(`fetchCase failed: ${r.status}`)
+  return r.json()
+}

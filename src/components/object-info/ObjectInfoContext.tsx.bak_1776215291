@@ -1,0 +1,108 @@
+import {
+  createContext, useContext, useState, useCallback, useEffect, useRef,
+  type ReactNode,
+} from 'react'
+import { buildAliasMap, resolveTerm } from '../../lib/object-info/aliasResolver'
+import type { AliasMap } from '../../lib/object-info'
+
+interface OpenPayload {
+  sql: string
+  term: string
+}
+
+interface ObjectInfoCtx {
+  isOpen: boolean
+  collapsed: boolean
+  sql: string
+  term: string
+  aliasMap: AliasMap
+  resolved: string | null
+  open: (p: OpenPayload) => void
+  close: () => void
+  toggleCollapsed: () => void
+  setActiveSql: (sql: string | null, el?: HTMLElement | null) => void
+}
+
+const Ctx = createContext<ObjectInfoCtx | null>(null)
+
+export function useObjectInfo() {
+  const v = useContext(Ctx)
+  if (!v) throw new Error('ObjectInfoProvider missing')
+  return v
+}
+
+export function ObjectInfoProvider({ children }: { children: ReactNode }) {
+  const [isOpen, setOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
+  const [sql, setSql] = useState('')
+  const [term, setTerm] = useState('')
+  const [aliasMap, setAliasMap] = useState<AliasMap>({})
+  const [resolved, setResolved] = useState<string | null>(null)
+  const activeSqlRef = useRef<string | null>(null)
+
+  const open = useCallback(({ sql, term }: OpenPayload) => {
+    const am = buildAliasMap(sql)
+    const r = resolveTerm(term, am)
+    setSql(sql)
+    setTerm(term)
+    setAliasMap(am)
+    setResolved(r)
+    setCollapsed(false)
+    setOpen(true)
+  }, [])
+
+  const close = useCallback(() => setOpen(false), [])
+  const toggleCollapsed = useCallback(() => setCollapsed(c => !c), [])
+
+  // 전역 단축키: F5 = 열기, Esc = 닫기
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && isOpen) { close(); return }
+      if (e.key !== 'F5') return
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0) return
+      const picked = sel.toString().trim()
+      if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(picked)) return
+
+      let activeSql: string | null = activeSqlRef.current
+      const anchor = sel.anchorNode
+      const selEl = anchor instanceof Element ? anchor : anchor?.parentElement ?? null
+      if (!activeSql && selEl) {
+        const srcEl = selEl.closest('[data-sql-source]') as HTMLElement | null
+        if (srcEl && srcEl.dataset.sqlSource) activeSql = srcEl.dataset.sqlSource
+        else {
+          const pre = selEl.closest('pre')
+          if (pre) activeSql = pre.textContent ?? null
+        }
+      }
+      if (!activeSql) return
+      e.preventDefault()
+      open({ sql: activeSql, term: picked })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isOpen, open, close])
+
+  // 본문을 오른쪽 공간만큼 밀어서 겹침 방지
+  useEffect(() => {
+    const cls = isOpen && !collapsed ? 'object-info-open' : isOpen && collapsed ? 'object-info-collapsed' : ''
+    document.body.classList.remove('object-info-open', 'object-info-collapsed')
+    if (cls) document.body.classList.add(cls)
+    return () => {
+      document.body.classList.remove('object-info-open', 'object-info-collapsed')
+    }
+  }, [isOpen, collapsed])
+
+  const setActiveSql = useCallback((sql: string | null, _el?: HTMLElement | null) => {
+    activeSqlRef.current = sql
+  }, [])
+
+  return (
+    <Ctx.Provider value={{
+      isOpen, collapsed, sql, term, aliasMap, resolved,
+      open, close, toggleCollapsed, setActiveSql,
+    }}>
+      {children}
+    </Ctx.Provider>
+  )
+}

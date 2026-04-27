@@ -1,0 +1,2554 @@
+import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import {
+  CheckCircle2, X,
+  Search, Ban,
+  ChevronDown, ChevronRight, SlidersHorizontal,
+  BotMessageSquare,
+  Clock, User, AlertCircle, Minus, CalendarClock,
+  Maximize2, Trash2, RefreshCw, Download} from 'lucide-react'
+import type { ComponentType } from 'react'
+import { workItems, type WorkItem } from '../../mocks/workItems'
+import { calcElapsedRate, calcBuffersRate } from '../../lib/improvement'
+import { stripRetuneSuffix } from '../../lib/alias-util'
+import { fetchTuningRequests, deleteTuningRequests, requestTuning, fetchTuningRequestDetail, postTuningRequestsBatch, type TuningRequestSummary } from '../../lib/api'
+import { buildDefaultGroupName } from '../../lib/group-name'
+import { addHistoryEvent } from '../../mocks/workHistory'
+import { getNewV1Items, getQueueOrder, setQueueFront, getGlobalStatusOverrides } from '../../mocks/newItemsStore'
+import { isSqlException, findSqlException, subscribeSqlExceptions } from '../../mocks/sqlExceptions'
+import { getAlias, setAlias, subscribeAlias } from '../../mocks/aliasOverrides'
+import Button from '../../components/common/Button'
+import ConfirmDialog from '../../components/common/ConfirmDialog'
+import DataTable, { type ColumnDef, type SortState } from '../../components/common/DataTable'
+import SlidePanel from '../../components/common/SlidePanel'
+import TimeRangePicker from '../../components/common/TimeRangePicker'
+import MultiSelect from '../../components/common/MultiSelect'
+import DirectInputForm from '../../components/common/DirectInputForm'
+
+const SCHEMAS = ['OMS', 'HR', 'FIN', 'SALES', 'INV', 'SYS', 'DW', 'BI', 'PROC']
+const MODULES = ['OMS_BATCH', 'OMS_ONLINE', 'OMS_TRIGGER', 'HR_WEB', 'HR_ADMIN', 'HR_RPT', 'HR_PERF', 'FIN_CORE', 'FIN_SETTLE', 'SALES_RPT', 'SALES_WEB', 'SALES_API', 'INV_BATCH', 'SYS_PURGE', 'ETL_NIGHTLY', 'BI_DASH', 'PROC_WEB']
+import WorkDetailPanel from './WorkDetailPanel'
+import ComparePanel from '../../components/common/ComparePanel'
+import type { ComparePanelMode, ComparePanelData } from '../../components/common/ComparePanel'
+import CostSweepHero from '../../components/common/CostSweepHero'
+import WorkbenchContent from './WorkbenchContent'
+import ErrorBoundary from '../../components/common/ErrorBoundary'
+import type { PanelMode } from '../../components/common/SlidePanel'
+
+// ─── 상수 ─────────────────────────────────────────
+
+// [F-3b] backend tuning_requests 목록 응답 → WorkItem 매핑
+function mapBackendStatusToWorkStatus(s: TuningRequestSummary): WorkItem['status'] {
+  switch (s.status) {
+    case 'requested':
+    case 'tuning':
+      return 'tuning'
+    case 'completed':
+      return 'approval_pending'
+    case 'approved':
+      return 'apply_pending'
+    case 'applied':
+      return 'applied'
+    case 'rejected':
+      return 'rejected'
+    case 'failed':
+      return s.is_no_improve ? 'no_improve' : 'failed'
+    default:
+      return 'pending'
+  }
+}
+
+
+function inferRecommendationTypes(rationale: string | null | undefined, sqlPreview: string | null | undefined): ('index' | 'hint' | 'rewrite')[] {
+  const r = (rationale || '').toLowerCase()
+  const sql = (sqlPreview || '')
+  const types: ('index' | 'hint' | 'rewrite')[] = []
+  if (r.includes('인덱스') || /\bindex\b/i.test(r)) types.push('index')
+  if (sql.includes('/*+') || r.includes('힌트') || /\bhint\b/i.test(r)) types.push('hint')
+  if (types.length === 0) types.push('rewrite')
+  return types
+}
+
+function mapBackendSummaryToWorkItem(s: TuningRequestSummary): WorkItem {
+  const preview = s.source_sql_text_preview ?? ''
+  const fullSqlText = s.source_sql_text ?? preview
+  const aliasOrPreview = (s.alias ?? '').trim() || preview.slice(0, 60) || `튜닝 요청 #${s.id}`
+  return {
+    id: `BE-${s.id}`,
+    sqlId: s.asis_sql_id_hash ?? `BE-${s.id}`,
+    sqlText: fullSqlText,
+    status: mapBackendStatusToWorkStatus(s),
+    type: 'tuning',
+    createdAt: s.requested_at ?? new Date().toISOString(),
+    updatedAt: s.completed_at ?? s.requested_at ?? new Date().toISOString(),
+    assignee: 'AI',
+    instanceName: (s.instance_name != null && s.instance_name !== '' ? String(s.instance_name) : '-'),
+    instanceId: s.instance_id ?? null,
+    schemaName: s.schema_name ?? '',
+    workName: aliasOrPreview,              // 사용자 별칭 우선
+    alias: s.alias ?? undefined,
+    selectionSource: 'manual',
+    source: 'v$sql',
+    originalElapsed: s.before_elapsed_sec != null ? Math.round(s.before_elapsed_sec * 1000) : undefined,
+    tunedElapsed: s.after_elapsed_sec != null ? Math.round(s.after_elapsed_sec * 1000) : undefined,
+    originalBuffers: s.before_buffer_gets ?? undefined,
+    tunedBuffers: s.after_buffer_gets ?? undefined,
+    improvementRate: s.improvement_pct != null ? Math.round(s.improvement_pct * 100) : undefined,
+    recommendationTypes: inferRecommendationTypes(s.rationale, preview),
+    batchId: '',
+    beforePlanHash: s.before_plan_hash ?? undefined,
+    afterPlanHash: s.after_plan_hash ?? undefined,
+    beforeExecutions: s.before_executions ?? undefined,
+    afterExecutions: s.after_executions ?? undefined,
+    sourceSqlKey: s.asis_sql_id ?? undefined,
+    parentRequestId: s.parent_request_id ?? undefined,
+    executionResult: s.is_estimated === 'Y' ? 'estimated' : s.is_estimated === 'N' ? 'completed' : undefined,
+    integrityResult: s.result_match ?? undefined,
+    groupId: s.group_id ?? null,
+    groupName: s.request_group_name ?? null,
+    groupRequestCount: s.group_request_count ?? null,
+    requestSource: s.request_source ?? null,
+  }
+}
+
+const STATUS_LABELS: Record<WorkItem['status'], string> = {
+  scheduled: '예약중',
+  pending: '튜닝대기',
+  tuning: '튜닝중',
+  approval_pending: '튜닝완료',
+  apply_pending: '반영대기',
+  applied: '반영완료',
+  rejected: '반려',
+  failed: '실패',
+  cancelled: '취소',
+  no_improve: '개선없음',
+}
+
+/**
+ * Owner 아이콘 매핑 — 상태값 라벨 앞에 붙는 lucide 아이콘.
+ * Owner 축(공의 소유자) 시각화 전용. 색상은 STATUS_DOT_COLOR와 별도.
+ */
+const STATUS_OWNER_ICON: Record<WorkItem['status'], ComponentType<{ className?: string; size?: number }>> = {
+  scheduled: CalendarClock,
+  pending: Clock,
+  tuning: BotMessageSquare,
+  approval_pending: BotMessageSquare, // 2026-04-09 재정의: Owner 축 = 주체. AI 튜닝 완료 결과
+  apply_pending: User,
+  applied: CheckCircle2,
+  rejected: AlertCircle,
+  failed: AlertCircle,
+  cancelled: AlertCircle,
+  no_improve: Minus,
+}
+
+const STATUS_OWNER_ICON_COLOR: Record<WorkItem['status'], string> = {
+  scheduled: 'text-text-muted',
+  pending: 'text-text-muted',
+  tuning: 'text-code',
+  // 2026-04-09: AI 성공 마일스톤 → success green (warning amber 폐기)
+  approval_pending: 'text-success',
+  apply_pending: 'text-info',
+  applied: 'text-success',
+  rejected: 'text-danger',
+  failed: 'text-danger',
+  cancelled: 'text-danger',
+  no_improve: 'text-text-muted',
+}
+
+const STATUS_DOT_COLOR: Record<WorkItem['status'], string> = {
+  scheduled:        'bg-text-muted',
+  pending:          'bg-border',
+  tuning:           'bg-code',
+  // 2026-04-09: AI 성공 마일스톤 → success green
+  approval_pending: 'bg-success',
+  apply_pending:    'bg-info',
+  applied:          'bg-applied',
+  rejected:         'bg-danger',
+  failed:           'bg-danger',
+  cancelled:        'bg-danger/60',
+  no_improve:       'bg-text-muted',
+}
+
+
+// 정렬 우선순위: 튜닝완료(approval_pending)가 맨 위 — 사람 확인이 가장 시급
+const STATUS_SORT_ORDER: Record<WorkItem['status'], number> = {
+  approval_pending: 0,
+  apply_pending: 1,
+  pending: 2,
+  tuning: 3,
+  failed: 4,
+  applied: 5,
+  no_improve: 6,
+  rejected: 7,
+  cancelled: 8,
+  scheduled: 9,
+}
+
+// ─── 상태 인디케이터 (슬라이드 헤더용) ────────────────
+// 테이블 컬럼과 동일한 시각 언어: tuning/approval_pending은 CostSweepHero
+
+// ─── 별칭 셀: 로컬 state로 키 입력을 처리해 부모 재렌더 방지 ─────────
+const AliasCell = memo(function AliasCell({ row }: { row: WorkItem }) {
+  const initial = getAlias(row.id) ?? row.alias ?? ''
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(initial)
+
+  // override store가 외부에서 바뀌면 displayed value 동기화 (편집 중이 아닐 때만)
+  const latest = getAlias(row.id) ?? row.alias ?? ''
+  useEffect(() => {
+    if (!editing) setValue(latest)
+  }, [latest, editing])
+
+  const commit = () => {
+    setEditing(false)
+    if (value === latest) return
+    void setAlias(row.id, value, row.sqlId)
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') { e.preventDefault(); commit() }
+          if (e.key === 'Escape') { e.preventDefault(); setValue(latest); setEditing(false) }
+        }}
+        onBlur={commit}
+        className="w-[150px] text-[11px] px-1.5 py-0.5 rounded border border-action bg-white focus:outline-none"
+        placeholder="별칭 입력"
+      />
+    )
+  }
+  return (
+    <span
+      role="button"
+      title={latest || ''}
+      onClick={(e) => { e.stopPropagation(); setValue(latest); setEditing(true) }}
+      className="text-[11px] text-text-secondary truncate block max-w-[150px] cursor-text hover:bg-surface-alt hover:text-text-primary rounded px-1 py-0.5"
+    >
+      {latest || <span className="text-text-muted/50">—</span>}
+    </span>
+  )
+})
+
+function StatusIndicator({ status }: { status: WorkItem['status'] }) {
+  if (status === 'tuning') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-code">
+        <CostSweepHero size="xs" color="blue" animated className="shrink-0" />
+        {STATUS_LABELS[status]}
+      </span>
+    )
+  }
+  if (status === 'approval_pending') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-success">
+        <CostSweepHero size="xs" color="green" animated={false} className="shrink-0" />
+        {STATUS_LABELS[status]}
+      </span>
+    )
+  }
+  const Icon = STATUS_OWNER_ICON[status]
+  const iconColor = STATUS_OWNER_ICON_COLOR[status]
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${iconColor}`}>
+      <Icon size={14} />
+      {STATUS_LABELS[status]}
+    </span>
+  )
+}
+
+type TuningType = 'index' | 'hint' | 'rewrite'
+
+// ─── Property Filter (AWS Console style) ─────────────
+interface FilterChip {
+  property: string
+  propertyLabel: string
+  value: string
+  valueLabel: string
+}
+
+interface FilterProperty {
+  key: string
+  label: string
+  options: { value: string; label: string }[]
+}
+
+const FILTER_PROPERTIES: FilterProperty[] = [
+  { key: 'status', label: '상태', options: [
+    { value: 'approval_pending', label: '튜닝완료' }, { value: 'apply_pending', label: '반영대기' },
+    { value: 'applied', label: '반영완료' }, { value: 'rejected', label: '반려' },
+    { value: 'failed', label: '실패' }, { value: 'no_improve', label: '개선없음' },
+    { value: 'cancelled', label: '취소' }, { value: 'pending', label: '대기/진행' },
+  ]},
+  { key: 'tuningType', label: '유형', options: [
+    { value: 'index', label: '인덱스' }, { value: 'hint', label: '힌트' }, { value: 'rewrite', label: 'Rewrite' },
+  ]},
+  { key: 'source', label: '출처', options: [
+    { value: 'maxgauge', label: 'MaxGauge' }, { value: 'awr', label: 'AWR' }, { value: 'v$sql', label: 'V$SQL' },
+  ]},
+  { key: 'selectionSource', label: '선정방식', options: [
+    { value: 'auto', label: '자동선정' }, { value: 'manual', label: '수동선정' }, { value: 'direct_verify', label: '직접검증' },
+  ]},
+  { key: 'executionResult', label: '실행결과', options: [
+    { value: 'completed', label: '실측' }, { value: 'estimated', label: '예상' }, { value: 'timeout', label: 'T/O' },
+  ]},
+  { key: 'integrityResult', label: '정합성', options: [
+    { value: 'match', label: '일치' }, { value: 'mismatch', label: '불일치' }, { value: 'pending', label: '미확인' },
+  ]},
+]
+
+function computeDateRange7d(): { start: Date; end: Date } {
+  // 기본 조회 범위: 최근 60일 (mock/시드 데이터가 7일 범위 밖이면 리스트가 비어 보이는 이슈 방지)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return {
+    start: new Date(today.getTime() - 59 * 86400000),
+    end: new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59),
+  }
+}
+
+function fmtIsoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+type PresetKey = 'auto_today' | 'tuned_review'
+
+interface AppliedFilters {
+  dateStart: string
+  dateEnd: string
+  instance: string
+  sqlId: string
+  sqlText: string
+  requesters: string[]
+  schemas: string[]
+  modules: string[]
+  chips: FilterChip[]
+  freeText: string
+  presets: PresetKey[]
+}
+
+
+// ─── 헬퍼 ─────────────────────────────────────────
+function formatDate(iso: string): string {
+  const d = new Date(iso)
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// ─── 메인 컴포넌트 ──────────────────────────────────
+const _INITIAL_VIEW_MODE = (() => {
+  const v = localStorage.getItem('workPipelineViewMode')
+  if (v === 'items') return 'items' as const
+  // 'batches' 포함 그 외 모든 값 → 'groups' (localStorage 마이그레이션)
+  if (v === 'batches') localStorage.setItem('workPipelineViewMode', 'groups')
+  return 'groups' as const
+})()
+
+// ─── 그룹 뷰 컴포넌트 ──────────────────────────────────────────────
+interface GroupViewProps {
+  filteredItems: WorkItem[]
+  visibleColumns: ColumnDef<WorkItem>[]
+  navigateToDetail: (item: WorkItem, ri: number, e?: React.MouseEvent) => void
+  highlightId: string | null
+  getStatus: (item: WorkItem) => WorkItem['status']
+  selectedIds: Set<string>
+  toggleSelect: (id: string) => void
+  onGroupToggle: (groupItems: WorkItem[], checked: boolean) => void
+}
+
+function GroupView({ filteredItems, visibleColumns, navigateToDetail, highlightId, getStatus, selectedIds, toggleSelect, onGroupToggle }: GroupViewProps) {
+  // KPI 집계
+  const kpi = useMemo(() => {
+    let pending = 0, tuning = 0, done = 0, failed = 0
+    for (const it of filteredItems) {
+      const st = getStatus(it)
+      if (st === 'pending') pending++
+      else if (st === 'tuning') tuning++
+      else if (st === 'approval_pending' || st === 'apply_pending' || st === 'applied' || st === 'no_improve') done++
+      else if (st === 'rejected' || st === 'cancelled' || st === 'failed') failed++
+    }
+    const total = filteredItems.length || 1
+    const isRunning = pending > 0 || tuning > 0
+    const completedCnt = done + failed
+    const pct = Math.round((completedCnt / total) * 100)
+    return { pending, tuning, done, failed, total: filteredItems.length, isRunning, pct }
+  }, [filteredItems, getStatus])
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  // 그룹 뷰 내 트리 펼침 상태: item.id → expanded (default 접힘 = Set 비어있음)
+  const [groupExpandedIds, setGroupExpandedIds] = useState<Set<string>>(new Set())
+  const toggleGroupRowCollapse = (id: string) => {
+    setGroupExpandedIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+
+  // groupId(BE) → batchId(mock) → item.id(fallback) 순으로 그룹핑 — 단건도 반드시 카드 1개
+  const groups = useMemo(() => {
+    const map = new Map<string, { key: string; name: string; source: string | null; items: WorkItem[] }>()
+    for (const item of filteredItems) {
+      const key = item.groupId ?? item.batchId ?? `req:${item.id}`
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          name: item.groupName ?? item.batchMemo ?? `요청 #${item.id}`,
+          source: item.requestSource ?? (item.selectionSource === 'auto' ? 'V$SQL' : null),
+          items: [],
+        })
+      }
+      map.get(key)!.items.push(item)
+    }
+    // 최신순 정렬 (그룹 내 최신 createdAt 기준)
+    return [...map.values()].sort((a, b) => {
+      const aTime = Math.max(...a.items.map(i => new Date(i.createdAt).getTime()))
+      const bTime = Math.max(...b.items.map(i => new Date(i.createdAt).getTime()))
+      return bTime - aTime
+    })
+  }, [filteredItems])
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  // 그룹 상태 요약 계산 (4카테고리)
+  const groupSummary = (items: WorkItem[]) => {
+    let pending = 0, tuning = 0, done = 0, failed = 0
+    for (const it of items) {
+      const st = getStatus(it)
+      if (st === 'pending') pending++
+      else if (st === 'tuning') tuning++
+      else if (st === 'approval_pending' || st === 'apply_pending' || st === 'applied' || st === 'no_improve') done++
+      else if (st === 'rejected' || st === 'cancelled' || st === 'failed') failed++
+    }
+    const total = items.length || 1
+    const isRunning = pending > 0 || tuning > 0
+    const pct = Math.round(((done + failed) / total) * 100)
+    return { pending, tuning, done, failed, isRunning, pct, total: items.length }
+  }
+
+  // 그룹 내 parent_request_id 기반 트리 구성
+  const buildGroupTree = (items: WorkItem[]): {
+    displayItems: WorkItem[]
+    childrenMap: Map<string, WorkItem[]>
+    itemDepth: Map<string, number>
+  } => {
+    const byNumericId = new Map<number, WorkItem>()
+    for (const w of items) {
+      const num = parseInt(w.id.replace('BE-', ''), 10)
+      if (!isNaN(num)) byNumericId.set(num, w)
+    }
+    const pcMap = new Map<string, WorkItem[]>()
+    const isChildSet = new Set<string>()
+    for (const w of items) {
+      const pid = w.parentRequestId
+      if (pid == null) continue
+      const parent = byNumericId.get(pid)
+      if (!parent) continue
+      const arr = pcMap.get(parent.id) ?? []
+      arr.push(w)
+      pcMap.set(parent.id, arr)
+      isChildSet.add(w.id)
+    }
+    for (const arr of pcMap.values()) arr.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    const childrenMap = new Map<string, WorkItem[]>()
+    const roots = items.filter(w => !isChildSet.has(w.id))
+    roots.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    const displayItems: WorkItem[] = []
+    const itemDepth = new Map<string, number>()
+    for (const root of roots) {
+      const queue: Array<{ w: WorkItem; depth: number }> = [{ w: root, depth: 0 }]
+      while (queue.length > 0) {
+        const { w, depth } = queue.shift()!
+        itemDepth.set(w.id, depth)
+        displayItems.push(w)
+        const ch = pcMap.get(w.id) ?? []
+        if (ch.length > 0) {
+          childrenMap.set(w.id, ch)
+          if (groupExpandedIds.has(w.id)) {
+            for (const c of ch) queue.push({ w: c, depth: depth + 1 })
+          }
+        }
+      }
+    }
+    return { displayItems, childrenMap, itemDepth }
+  }
+
+  const REDUNDANT = new Set(['createdAt', 'instanceName', 'batchMemo', '_group', '_actions', '_workbench', '_tree'])
+  // _select 컬럼은 그룹별 격리 핸들러로 override해서 추가
+  const baseCols = visibleColumns.filter(c => !REDUNDANT.has(c.key) && c.key !== '_select')
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* KPI 헤더 */}
+      {kpi.total > 0 && (
+        <div className="shrink-0 px-4 py-3 border-b border-border bg-surface-alt flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            {kpi.isRunning && <span className="w-2 h-2 rounded-full bg-action animate-pulse shrink-0" />}
+            <span className="text-[12px] font-semibold text-text-primary">전체 {kpi.total}건</span>
+          </div>
+          <div className="flex items-center gap-3 text-[11px] tabular-nums">
+            <span className={kpi.pending > 0 ? 'text-text-secondary' : 'text-text-muted/40'}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-text-muted/40 mr-0.5 align-middle" />대기 {kpi.pending}
+            </span>
+            <span className={kpi.tuning > 0 ? 'text-action' : 'text-text-muted/40'}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-action mr-0.5 align-middle" />튜닝중 {kpi.tuning}
+            </span>
+            <span className={kpi.done > 0 ? 'text-warning' : 'text-text-muted/40'}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-warning mr-0.5 align-middle" />완료 {kpi.done}
+            </span>
+            <span className={kpi.failed > 0 ? 'text-danger' : 'text-text-muted/40'}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-danger mr-0.5 align-middle" />실패 {kpi.failed}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-1 min-w-[120px] max-w-[200px] ml-auto">
+            <div className="relative h-2 flex-1 bg-surface-muted rounded-full overflow-hidden">
+              <div
+                className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ease-out overflow-hidden ${kpi.isRunning ? 'bg-action' : 'bg-success'}`}
+                style={{ width: `${kpi.pct}%` }}
+              >
+                {kpi.isRunning && <div className="absolute inset-0 tuning-gauge-shimmer" />}
+              </div>
+            </div>
+            <span className="text-[10px] font-mono text-text-secondary shrink-0 w-8 text-right">{kpi.pct}%</span>
+          </div>
+        </div>
+      )}
+      <div className="flex-1 min-h-0 overflow-auto">
+      <div className="divide-y divide-border">
+        {groups.map(g => {
+          const open = expandedGroups.has(g.key)
+          const gs = groupSummary(g.items)
+          const count = g.items.length
+          const firstItem = g.items[0]
+          const createdAt = firstItem ? new Date(firstItem.createdAt) : null
+          const pad = (n: number) => String(n).padStart(2, '0')
+          const dateStr = createdAt
+            ? `${pad(createdAt.getMonth()+1)}-${pad(createdAt.getDate())} ${pad(createdAt.getHours())}:${pad(createdAt.getMinutes())}`
+            : ''
+          return (
+            <div key={g.key}>
+              {/* 그룹 헤더 행 */}
+              <div
+                className="flex items-center gap-2 px-3 py-2.5 bg-surface-alt hover:bg-surface-muted cursor-pointer select-none"
+                onClick={() => toggleGroup(g.key)}
+              >
+                {/* 좌측: 그룹명 + 메타 */}
+                <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[12px] font-semibold text-text-primary truncate">{g.name}</span>
+                    <span className="text-[10px] text-text-muted shrink-0">{count}건</span>
+                    {g.source && (
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-surface-muted text-text-muted shrink-0">{g.source}</span>
+                    )}
+                    {gs.isRunning && <span className="w-1.5 h-1.5 rounded-full bg-action animate-pulse shrink-0" />}
+                  </div>
+                  {dateStr && <span className="text-[10px] text-text-muted font-mono">{dateStr}</span>}
+                </div>
+                {/* 우측: 카테고리 카운트 + 게이지 */}
+                <div className="shrink-0 flex flex-col items-end gap-1">
+                  <div className="flex items-center gap-2 text-[10px] tabular-nums">
+                    <span className={gs.pending > 0 ? 'text-text-secondary' : 'text-text-muted/40'}>대기 {gs.pending}</span>
+                    <span className={gs.tuning > 0 ? 'text-action' : 'text-text-muted/40'}>튜닝중 {gs.tuning}</span>
+                    <span className={gs.done > 0 ? 'text-warning' : 'text-text-muted/40'}>완료 {gs.done}</span>
+                    <span className={gs.failed > 0 ? 'text-danger' : 'text-text-muted/40'}>실패 {gs.failed}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 w-[120px]">
+                    <div className="relative h-1.5 flex-1 bg-surface-muted rounded-full overflow-hidden">
+                      <div
+                        className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ${gs.isRunning ? 'bg-action' : 'bg-success'}`}
+                        style={{ width: `${gs.pct}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-mono text-text-muted shrink-0 w-7 text-right">{gs.pct}%</span>
+                  </div>
+                </div>
+                {/* chevron */}
+                {open ? <ChevronDown size={13} className="shrink-0 text-action" /> : <ChevronRight size={13} className="shrink-0 text-text-muted" />}
+              </div>
+              {/* 펼친 자식 request 행 */}
+              {open && (() => {
+                const { displayItems: gDisplay, childrenMap: gChildren, itemDepth: gDepth } = buildGroupTree(g.items)
+                return (
+                  <div className="border-l-2 border-l-action/30 ml-4 bg-white">
+                    <DataTable
+                      columns={[
+                        {
+                          key: '_select',
+                          header: (() => {
+                            const gIds = g.items.map(i => i.id)
+                            const checkedCnt = gIds.filter(id => selectedIds.has(id)).length
+                            const allChecked = checkedCnt === gIds.length && gIds.length > 0
+                            const someChecked = checkedCnt > 0 && !allChecked
+                            return (
+                              <div className="text-center" onClick={e => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-border cursor-pointer"
+                                  checked={allChecked}
+                                  ref={el => { if (el) el.indeterminate = someChecked }}
+                                  onChange={e => { e.stopPropagation(); onGroupToggle(g.items, e.target.checked) }}
+                                  onClick={e => e.stopPropagation()}
+                                />
+                              </div>
+                            )
+                          })(),
+                          width: 40, minWidth: 40, resizable: false, draggable: false, sortable: false,
+                          render: (_v, row) => (
+                            <div className="text-center" onClick={e => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-border cursor-pointer"
+                                checked={selectedIds.has(row.id)}
+                                onChange={e => { e.stopPropagation(); toggleSelect(row.id) }}
+                                onClick={e => e.stopPropagation()}
+                              />
+                            </div>
+                          ),
+                        } as ColumnDef<WorkItem>,
+                        {
+                          key: '_tree', header: '', width: 36, sortable: false,
+                          render: (_v, row) => {
+                            const depth = gDepth.get(row.id) ?? 0
+                            if (depth > 0) return <span className="text-border/70 text-[13px] leading-none">└</span>
+                            const childCount = (gChildren.get(row.id) ?? []).length
+                            if (childCount === 0) return null
+                            const isCollapsed = !groupExpandedIds.has(row.id)
+                            return (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleGroupRowCollapse(row.id) }}
+                                className={`inline-flex items-center gap-0.5 px-1.5 py-1 rounded cursor-pointer ${isCollapsed ? 'text-text-secondary' : 'text-action'}`}
+                                title={isCollapsed ? `펼치기 (${childCount}건)` : '접기'}
+                              >
+                                <ChevronRight size={13} className={`shrink-0 transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />
+                                <span className="text-[11px] font-medium tabular-nums">{childCount}</span>
+                              </button>
+                            )
+                          },
+                        } as ColumnDef<WorkItem>,
+                        ...baseCols,
+                      ]}
+                      data={gDisplay}
+                      rowKey="id"
+                      borderless
+                      fluid
+                      onRowClick={(row, ri, e) => navigateToDetail(row, ri, e)}
+                      rowClassName={(row) => {
+                        const depth = gDepth.get(row.id) ?? 0
+                        const classes = []
+                        if (row.id === highlightId) classes.push('highlight-new-item')
+                        if (depth > 0) classes.push('bg-surface-alt/40')
+                        return classes.join(' ')
+                      }}
+                    />
+                  </div>
+                )
+              })()}
+            </div>
+          )
+        })}
+        {groups.length === 0 && (
+          <div className="flex items-center justify-center py-12 text-text-muted text-sm">조회된 요청이 없습니다</div>
+        )}
+      </div>
+      </div>
+    </div>
+  )
+}
+
+export default function WorkPipeline() {
+  // ─── 하이라이트 (TopSql에서 작업 생성 후 이동 시) ───
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  const [queueOrderVersion, setQueueOrderVersion] = useState(0)
+
+  useEffect(() => {
+    const handler = () => setQueueOrderVersion(v => v + 1)
+    window.addEventListener('queueOrderChange', handler)
+    return () => window.removeEventListener('queueOrderChange', handler)
+  }, [])
+
+  useEffect(() => {
+    const state = location.state as { highlightItemId?: string; openItemId?: string } | null
+    if (!state) return
+    window.history.replaceState({}, '')
+    if (state.highlightItemId) {
+      setHighlightId(state.highlightItemId)
+      const timer = setTimeout(() => setHighlightId(null), 4000)
+      return () => clearTimeout(timer)
+    }
+    if (state.openItemId) {
+      const allItems = backendItems
+      const target = allItems.find(w => w.id === state.openItemId)
+      if (target) setPanelItem(target)
+    }
+  }, [location.state])
+
+  // URL ?detail=ITEM_ID → 슬라이드 패널 자동 열기 (새 탭에서 열기용)
+  useEffect(() => {
+    const detailId = searchParams.get('detail')
+    if (!detailId) return
+    const allItems = backendItems
+    const target = allItems.find(w => w.id === detailId)
+    if (target) setPanelItem(target)
+    setSearchParams({}, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  // scroll into view when highlight row renders
+  useEffect(() => {
+    if (!highlightId) return
+    // small delay to let DataTable render the row
+    const raf = requestAnimationFrame(() => {
+      const el = document.querySelector('.highlight-new-item')
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [highlightId])
+
+  // 퀵 프리셋 (현재 비어있음 — 하위 호환 위해 state만 유지)
+  const [activePresets] = useState<Set<PresetKey>>(new Set())
+
+  // 뷰 모드
+  const [viewMode, setViewMode] = useState<'groups' | 'items'>(_INITIAL_VIEW_MODE)
+  // 칩 상태는 별도 저장하지 않고 startTime/endTime에서 파생
+
+  // 예외 스토어 변경 tick (리렌더 트리거)
+  const [exceptionTick, setExceptionTick] = useState(0)
+  useEffect(() => subscribeSqlExceptions(() => setExceptionTick(t => t + 1)), [])
+  const [aliasTick, setAliasTick] = useState(0)
+  useEffect(() => subscribeAlias(() => setAliasTick(t => t + 1)), [])
+
+  // 인라인 상태 변경 추적
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, WorkItem['status']>>({})
+
+  // [F-3b] backend tuning_requests 목록 fetch + 5초 polling (튜닝 요청 즉시 반영)
+  const [backendItems, setBackendItems] = useState<WorkItem[]>([])
+  useEffect(() => {
+    let stopped = false
+    const refresh = () => {
+      fetchTuningRequests({ limit: 500 })
+        .then(rows => {
+          if (stopped) return
+          setBackendItems(rows.map(mapBackendSummaryToWorkItem))
+        })
+        .catch(err => console.error('[fetchTuningRequests failed]', err))
+    }
+    refresh()
+    const t = setInterval(refresh, 5000)
+    return () => { stopped = true; clearInterval(t) }
+  }, [])
+  const getStatus = useCallback((item: WorkItem) => statusOverrides[item.id] ?? item.status, [statusOverrides])
+
+  // 전역 상태 오버라이드 (알림 재시도 등) 구독
+  useEffect(() => {
+    const handler = () => {
+      const overrides = getGlobalStatusOverrides()
+      if (overrides.size === 0) return
+      setStatusOverrides(prev => {
+        const merged = { ...prev }
+        overrides.forEach((status, id) => { merged[id] = status })
+        return merged
+      })
+    }
+    window.addEventListener('globalStatusOverrideChange', handler)
+    return () => window.removeEventListener('globalStatusOverrideChange', handler)
+  }, [])
+
+  // 선택
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  // 토스트
+  const [toast, setToast] = useState<string | null>(null)
+  const showToast = (msg: string) => {
+    setToast(msg)
+    setTimeout(() => setToast(null), 4000)
+  }
+
+  // 모달
+  const [confirmAction, setConfirmAction] = useState<null | {
+    title: string; message?: string; variant: 'danger' | 'warning'; onConfirm: () => void; item?: WorkItem
+  }>(null)
+  const [rejectTarget, setRejectTarget] = useState<WorkItem | null>(null)
+  const [rejectReason, setRejectReason] = useState('')
+  const rejectConfirmedRef = useRef<(() => void) | null>(null)
+
+  // 페이지 뷰: list(목록+peek) vs workspace(인라인 워크벤치)
+  const [pageView, setPageView] = useState<'list' | 'workspace'>('list')
+  const [workspaceItem, setWorkspaceItem] = useState<WorkItem | null>(null)
+
+  // 슬라이드 패널 (peek 전용 — 좁은 모드만)
+  const [panelItem, setPanelItem] = useState<WorkItem | null>(null)
+  const [panelMode, setPanelMode] = useState<PanelMode>('slide')
+  // panelWidthPx 제거 — workspace 전환 시 onWidthChange에서 직접 처리
+
+  // workspace 진입
+  const enterWorkspace = useCallback((item: WorkItem) => {
+    setPanelItem(null) // peek 닫기
+    setWorkspaceItem(item)
+    setPageView('workspace')
+  }, [])
+
+  // workspace 이탈
+  const exitWorkspace = useCallback(() => {
+    setPageView('list')
+    setWorkspaceItem(null)
+  }, [])
+
+  // SQL 전체보기 모달
+  const [sqlPreview, setSqlPreview] = useState<WorkItem | null>(null)
+
+  // 컬럼 토글 + 정렬
+  const DEFAULT_HIDDEN = new Set(['selectionSource', '_selectionReason', 'estimatedDailyExec', 'schemaName', 'module'])
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN))
+  const [colToggleOpen, setColToggleOpen] = useState(false)
+  const colToggleRef = useRef<HTMLDivElement>(null)
+  const [sortState, setSortState] = useState<SortState>({ key: 'createdAt', direction: 'desc' })
+  const [columnOrder, setColumnOrder] = useState<ColumnDef<WorkItem>[] | null>(null)
+
+  // 조회조건 바
+  const [startTime, setStartTime] = useState<Date>(() => computeDateRange7d().start)
+  const [endTime, setEndTime] = useState<Date>(() => computeDateRange7d().end)
+  const [selectedInstance, setSelectedInstance] = useState('')
+  const [sqlIdQuery, setSqlIdQuery] = useState('')
+  const [sqlTextQuery, setSqlTextQuery] = useState('')
+  const [requesters, setRequesters] = useState<string[]>([])
+  const [schemas, setSchemas] = useState<string[]>([])
+  const [modules, setModules] = useState<string[]>([])
+  // filterExpanded removed — always show filters inline
+  const [directInputOpen, setDirectInputOpen] = useState(false)
+
+  // Property filter bar
+  const [filterChips, setFilterChips] = useState<FilterChip[]>([])
+  const [freeText, setFreeText] = useState('')
+  const [filterBarFocused, setFilterBarFocused] = useState(false)
+  const [filterStep, setFilterStep] = useState<'property' | 'value'>('property')
+  const [selectedFilterProp, setSelectedFilterProp] = useState<FilterProperty | null>(null)
+  const [filterQuery, setFilterQuery] = useState('')
+  const filterBarRef = useRef<HTMLDivElement>(null)
+  const filterInputRef = useRef<HTMLInputElement>(null)
+
+  // Applied filters (조회 시 갱신)
+  const [applied, setApplied] = useState<AppliedFilters>(() => {
+    const range = computeDateRange7d()
+    return { dateStart: fmtIsoDate(range.start), dateEnd: fmtIsoDate(range.end), instance: '', sqlId: '', sqlText: '', requesters: [], schemas: [], modules: [], chips: [], freeText: '', presets: [] }
+  })
+
+  // 상태 필터
+  const [statusFilter, setStatusFilter] = useState<WorkItem['status'] | 'all' | 'approved_all'>('all')
+
+  // 필터바 외부 클릭 닫기
+  useEffect(() => {
+    if (!filterBarFocused) return
+    const handler = (e: MouseEvent) => {
+      if (filterBarRef.current && !filterBarRef.current.contains(e.target as Node)) {
+        setFilterBarFocused(false)
+        setFilterStep('property')
+        setSelectedFilterProp(null)
+        setFilterQuery('')
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [filterBarFocused])
+
+  // 컬럼 토글 외부 클릭 닫기
+  useEffect(() => {
+    if (!colToggleOpen) return
+    const handler = (e: MouseEvent) => {
+      if (colToggleRef.current && !colToggleRef.current.contains(e.target as Node)) {
+        setColToggleOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [colToggleOpen])
+
+  // ─── 탭별 기본 필터 + 사용자 필터 적용 ─────────
+  const filteredItems = useMemo(() => {
+    const allItems = backendItems
+    let items = allItems.map(w => {
+      // 1) 사용자 인라인 오버라이드 (반려/취소 등)
+      let effectiveStatus = statusOverrides[w.id] ?? w.status
+      let cancelReason = w.cancelReason
+      let cancelledAt = w.cancelledAt
+      // 2) 예외 SQL 정책 가드 — 아직 실행 전 단계(pending/tuning)인 auto 작업은 자동 취소
+      if (
+        w.selectionSource === 'auto' &&
+        (effectiveStatus === 'pending' || effectiveStatus === 'tuning') &&
+        isSqlException(w.sqlId)
+      ) {
+        const ex = findSqlException(w.sqlId)
+        effectiveStatus = 'cancelled'
+        cancelReason = ex?.reason
+          ? `예외 SQL 정책 차단 — ${ex.reason}`
+          : '예외 SQL 정책 차단'
+        cancelledAt = ex?.registeredAt ?? cancelledAt
+      }
+      return { ...w, status: effectiveStatus, cancelReason, cancelledAt }
+    })
+
+    // 조회조건 필터
+    const af = applied
+    // 프리셋 필터
+    if (af.presets.includes('auto_today')) {
+      items = items.filter(w => w.selectionSource === 'auto')
+    }
+    if (af.presets.includes('tuned_review')) {
+      items = items.filter(w => w.status === 'approval_pending')
+    }
+    if (af.dateStart) {
+      const from = new Date(af.dateStart + 'T00:00:00')
+      items = items.filter(w => new Date(w.createdAt) >= from)
+    }
+    if (af.dateEnd) {
+      const to = new Date(af.dateEnd + 'T23:59:59')
+      items = items.filter(w => new Date(w.createdAt) <= to)
+    }
+    if (af.instance) items = items.filter(w => w.instanceName === af.instance)
+    if (af.sqlId.trim()) {
+      const q = af.sqlId.trim().toLowerCase()
+      items = items.filter(w => w.sqlId.toLowerCase().includes(q))
+    }
+    if (af.sqlText.trim()) {
+      const q = af.sqlText.trim().toLowerCase()
+      items = items.filter(w => w.sqlText.toLowerCase().includes(q))
+    }
+    if (af.requesters.length > 0) {
+      items = items.filter(w => af.requesters.includes(w.requestedBy ?? ''))
+    }
+    if (af.schemas.length > 0) {
+      items = items.filter(w => af.schemas.includes(w.schemaName))
+    }
+    if (af.modules.length > 0) {
+      items = items.filter(w => {
+        const m = (w as unknown as { module?: string }).module
+        return !m || af.modules.includes(m)
+      })
+    }
+    for (const chip of af.chips) {
+      switch (chip.property) {
+        case 'status':
+          if (chip.value === 'pending') items = items.filter(w => w.status === 'pending' || w.status === 'tuning')
+          else items = items.filter(w => w.status === chip.value)
+          break
+        case 'tuningType':
+          items = items.filter(w => w.recommendationTypes?.includes(chip.value as TuningType) ?? false)
+          break
+        case 'source': items = items.filter(w => w.source === chip.value); break
+        case 'selectionSource': items = items.filter(w => w.selectionSource === chip.value); break
+        case 'executionResult': items = items.filter(w => w.executionResult === chip.value); break
+        case 'integrityResult': items = items.filter(w => w.integrityResult === chip.value); break
+      }
+    }
+    if (af.freeText.trim()) {
+      const q = af.freeText.toLowerCase()
+      items = items.filter(w =>
+        w.sqlId.toLowerCase().includes(q) ||
+        w.sqlText.toLowerCase().includes(q) ||
+        w.id.toLowerCase().includes(q)
+      )
+    }
+    // 상태 필터 (탭) — scheduled는 기본 작업함에서 제외, 명시적으로 선택한 경우에만 표시
+    if (statusFilter === 'all') {
+      items = items.filter(w => w.status !== 'scheduled')
+    } else if (statusFilter === 'approved_all' as any) {
+      items = items.filter(w => w.status === 'apply_pending' || w.status === 'applied' || w.status === 'fulfilled')
+    } else {
+      items = items.filter(w => w.status === statusFilter)
+    }
+
+    // 정렬: 튜닝완료(approval_pending) 맨 위, 대기 건은 수동 큐 순서, 나머지는 최신순
+    const qo = getQueueOrder()
+    items.sort((a, b) => {
+      const so = STATUS_SORT_ORDER[a.status] - STATUS_SORT_ORDER[b.status]
+      if (so !== 0) return so
+      if (a.status === 'pending' && b.status === 'pending') {
+        const aIdx = qo.indexOf(a.id)
+        const bIdx = qo.indexOf(b.id)
+        if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx
+        if (aIdx !== -1) return -1
+        if (bIdx !== -1) return 1
+        return (a.queuePosition ?? 999) - (b.queuePosition ?? 999)
+      }
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    })
+
+    return items
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusOverrides, applied, queueOrderVersion, statusFilter, exceptionTick, aliasTick, backendItems])
+
+  // ─── 평면 리스트 트리: parentRequestId + group_id 기반 parent-child indent ──
+  // groupKey: group_id(BE) → batchId(mock) → req:id(fallback) — 같은 group 안에서만 자식 인정
+  const itemGroupKey = (w: WorkItem): string =>
+    w.groupId != null ? `GRP:${w.groupId}` : w.batchId != null ? `BAT:${w.batchId}` : `REQ:${w.id}`
+
+  // 펼친 부모 row ids (default 접힘 = Set 비어있음, 클릭 시 추가)
+  const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(new Set())
+  const toggleRowCollapse = useCallback((id: string) => {
+    setExpandedRowIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }, [])
+
+  // ─── parentRequestId + group_id 기반 평면 트리 (항상 전체 표시) ──────────
+  const { displayItems, childrenMap, itemDepth } = useMemo(() => {
+    // 전체 filteredItems에서 numericId 매핑
+    const byNumericId = new Map<number, WorkItem>()
+    for (const w of filteredItems) {
+      const num = parseInt(w.id.replace('BE-', ''), 10)
+      if (!isNaN(num)) byNumericId.set(num, w)
+    }
+
+    // parentId → children (같은 group_id 안에서만 자식 인정)
+    const pcMap = new Map<string, WorkItem[]>()  // parent.id → children[]
+    const isChildSet = new Set<string>()
+    const depthMap = new Map<string, number>()
+
+    for (const w of filteredItems) {
+      const pid = w.parentRequestId
+      if (pid == null) continue
+      const parent = byNumericId.get(pid)
+      if (!parent) continue
+      // 같은 group_id 안에서만 자식 인정
+      if (itemGroupKey(w) !== itemGroupKey(parent)) continue
+      const arr = pcMap.get(parent.id) ?? []
+      arr.push(w)
+      pcMap.set(parent.id, arr)
+      isChildSet.add(w.id)
+    }
+    // 자식 시간순 정렬
+    for (const arr of pcMap.values()) arr.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+
+    // childrenMap: parentId → 평탄화 자식 목록 (BFS)
+    const childrenMap = new Map<string, WorkItem[]>()
+    const roots = filteredItems.filter(w => !isChildSet.has(w.id))
+    // 루트 날짜 DESC 정렬
+    roots.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+    // BFS로 depth 계산 + collapsedRowIds 적용 (접힌 부모의 자식은 displayItems에서 제외)
+    const displayItems: WorkItem[] = []
+    for (const root of roots) {
+      const queue: Array<{ w: WorkItem; depth: number }> = [{ w: root, depth: 0 }]
+      while (queue.length > 0) {
+        const { w, depth } = queue.shift()!
+        depthMap.set(w.id, depth)
+        displayItems.push(w)
+        const ch = pcMap.get(w.id) ?? []
+        if (ch.length > 0) {
+          childrenMap.set(w.id, ch)
+          // 접힌 상태면 자식을 displayItems에 추가하지 않음
+          if (expandedRowIds.has(w.id)) {
+            for (const c of ch) queue.push({ w: c, depth: depth + 1 })
+          }
+        }
+      }
+    }
+
+    return { displayItems, childrenMap, itemDepth: depthMap }
+  }, [filteredItems, expandedRowIds])
+
+
+  // ─── 헤더 체크박스 (전체 선택/해제) ─────────────
+  const filteredIdSet = useMemo(() => new Set(filteredItems.map(w => w.id)), [filteredItems])
+  const selectedInFilterCount = useMemo(
+    () => [...selectedIds].filter(id => filteredIdSet.has(id)).length,
+    [selectedIds, filteredIdSet]
+  )
+  const headerCheckChecked = filteredItems.length > 0 && selectedInFilterCount === filteredItems.length
+  const headerCheckIndeterminate = selectedInFilterCount > 0 && selectedInFilterCount < filteredItems.length
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds(prev => {
+      const allSelected = filteredItems.length > 0 && filteredItems.every(w => prev.has(w.id))
+      const next = new Set(prev)
+      if (allSelected) {
+        for (const w of filteredItems) next.delete(w.id)
+      } else {
+        for (const w of filteredItems) next.add(w.id)
+      }
+      return next
+    })
+  }, [filteredItems])
+
+
+  // ─── 프리셋 건수 + 상태 건수 ──────────────────────
+  const { statusCounts, exceptionCancelledCount } = useMemo(() => {
+    const allItems = backendItems
+    // 예외 가드 포함한 유효 상태 계산
+    const effective = allItems.map(w => {
+      let s = statusOverrides[w.id] ?? w.status
+      if (
+        w.selectionSource === 'auto' &&
+        (s === 'pending' || s === 'tuning') &&
+        isSqlException(w.sqlId)
+      ) {
+        s = 'cancelled'
+      }
+      return { ...w, status: s }
+    })
+    const counts: Record<string, number> = {}
+    for (const w of effective) counts[w.status] = (counts[w.status] || 0) + 1
+    const cancelledByException = effective.filter(
+      w => w.status === 'cancelled' && w.selectionSource === 'auto' && isSqlException(w.sqlId)
+    ).length
+    return {
+      statusCounts: counts,
+      exceptionCancelledCount: cancelledByException,
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusOverrides, exceptionTick, backendItems])
+
+
+  // ─── 인스턴스 목록 (필터용) ─────────────────────
+  const instances = useMemo(() => [...new Set(backendItems.map(w => w.instanceName))].sort(), [])
+
+  // ─── 선택 핸들러 ────────────────────────────────
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  // 부모 행 체크 시 자신 + 자식 전체 체크/해제
+  const handleGroupToggle = useCallback((root: WorkItem, checked: boolean) => {
+    const children = childrenMap.get(root.id) ?? []
+    const ids = [root.id, ...children.map(c => c.id)]
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (checked) ids.forEach(id => next.add(id))
+      else ids.forEach(id => next.delete(id))
+      return next
+    })
+  }, [childrenMap])
+
+  // ─── 큐 우선처리 ──────────────────────────────
+  const handlePrioritize = useCallback((item: WorkItem) => {
+    setQueueFront(item.id)
+    setQueueOrderVersion(v => v + 1)
+  }, [])
+
+  // ─── 튜닝 취소 ────────────────────────────────
+  const handleCancel = useCallback((item: WorkItem) => {
+    setConfirmAction({
+      title: '튜닝 취소', variant: 'danger',
+      message: `${item.sqlId} 작업을 취소하시겠습니까?`,
+      onConfirm: () => {
+        setStatusOverrides(prev => ({ ...prev, [item.id]: 'cancelled' }))
+        setSelectedIds(prev => { const n = new Set(prev); n.delete(item.id); return n })
+        setConfirmAction(null)
+        showToast(`${item.sqlId} 튜닝 작업이 취소되었습니다.`)
+      },
+    })
+  }, [])
+
+  // ─── 재튜닝 요청 ──────────
+  // BE- 항목: 백엔드에 새 튜닝 잡 생성 (LLM 파이프라인 재실행)
+  // mock 항목: pending 상태 override 만 (런타임 큐 시뮬레이션)
+  const handleRetune = useCallback((item: WorkItem) => {
+    const isBackend = item.id.startsWith('BE-')
+    setConfirmAction({
+      title: '재튜닝 요청', variant: 'warning',
+      message: `${item.sqlId}\n재튜닝을 요청하시겠습니까?\n${isBackend ? '새 튜닝 잡이 생성되며 LLM 파이프라인이 다시 실행됩니다.' : '대기 큐에 다시 등록됩니다.'}`,
+      onConfirm: async () => {
+        setConfirmAction(null)
+        if (isBackend) {
+          showToast(`${item.sqlId} — 재튜닝 요청 전송 중...`)
+          try {
+            const numericId = item.id.slice(3)
+            const d = await fetchTuningRequestDetail(numericId)
+            if (!d.source_sql_text) throw new Error('source_sql_text 없음')
+            // [F-4] 재튜닝 별칭: 같은 asis_sql_id_hash 의 기존 alias 중 base 추출 + max(N)+1
+            const all = backendItems  // 이미 fetch 된 dedup 안된 원본은 없으므로 fresh fetch
+            const samples = await fetchTuningRequests({ limit: 1000 })
+            const sameSql = samples.filter(s => s.asis_sql_id_hash === (item.sqlId.startsWith('BE-') ? null : item.sqlId) || s.id === numericId)
+            // 더 안전: numericId 의 asis_sql_id_hash 로 다시 필터
+            const myHash = samples.find(s => s.id === numericId)?.asis_sql_id_hash
+            const cohort = myHash ? samples.filter(s => s.asis_sql_id_hash === myHash) : sameSql
+            // 같은 SQL 의 모든 alias 후보 수집
+            // [F-4] base = id 가장 작은 (최초) request 의 alias, 모든 trailing 잘못된 패턴 strip
+            const cohortSorted = cohort.slice().sort((a, b) => Number(a.id) - Number(b.id))
+            let baseAlias = stripRetuneSuffix(cohortSorted[0]?.alias)
+            if (!baseAlias) baseAlias = stripRetuneSuffix(item.alias ?? item.workName ?? '')
+            if (!baseAlias) baseAlias = `튜닝_#${numericId}`
+            // max(N) — cohort 의 _재튜닝(N) suffix 만
+            let maxN = 0
+            for (const s of cohort) {
+              const a = (s.alias ?? '').trim()
+              const m = a.match(/_재튜닝\((\d+)\)$/)
+              if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n }
+            }
+            const newAlias = `${baseAlias}_재튜닝(${maxN + 1})`
+            void all // unused
+            // [F-5] 재튜닝: detail.bind_variables 가져와서 재사용 (backend #25 응답 보강 후 활용)
+            const dBinds = ((d as unknown as { bind_variables?: Array<{name:string,data_type:string,value:string,position:number}> }).bind_variables) ?? []
+            const batchResp = await postTuningRequestsBatch({
+              batch_meta: {
+                request_group_name: buildDefaultGroupName('RETUNE', 'admin', 1),
+                request_source: 'V$SQL',
+                instance_id: item.instanceId ?? item.instanceName,
+              },
+              items: [{
+                sql_text: d.source_sql_text,
+                schema_name: item.schemaName || null,
+                binds: dBinds.map(b => ({
+                  name: b.name,
+                  value: String(b.value ?? ''),
+                  data_type: b.data_type ?? 'VARCHAR2',
+                  position: b.position ?? undefined,
+                })),
+                auto_tune: true,
+                alias: newAlias,
+                parent_request_id: numericId,
+              }],
+            })
+            const retunedId = batchResp.requests[0]?.request_id
+            setSelectedIds(prev => { const n = new Set(prev); n.delete(item.id); return n })
+            showToast(`재튜닝 요청 접수됨 (#${retunedId})`)
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            showToast(`재튜닝 요청 실패: ${msg}`, 'error')
+          }
+        } else {
+          setStatusOverrides(prev => ({ ...prev, [item.id]: 'pending' }))
+          setSelectedIds(prev => { const n = new Set(prev); n.delete(item.id); return n })
+          showToast(`${item.sqlId} — 재튜닝 요청. 대기 큐에 등록되었습니다.`)
+        }
+      },
+    })
+  }, [])
+
+  // ─── 인라인 확인(승인)/반려 ──────────────────────────
+  const handleVerify = useCallback((item: WorkItem) => {
+    setConfirmAction({
+      title: '확인 처리', variant: 'warning', item,
+      onConfirm: () => {
+        setStatusOverrides(prev => ({ ...prev, [item.id]: 'apply_pending' }))
+        setSelectedIds(prev => { const n = new Set(prev); n.delete(item.id); return n })
+        setConfirmAction(null)
+        showToast(`${item.sqlId} — 확인 완료. 반영대기로 전환되었습니다.`)
+      },
+    })
+  }, [])
+
+  const confirmReject = useCallback(() => {
+    if (!rejectTarget) return
+    setStatusOverrides(prev => ({ ...prev, [rejectTarget.id]: 'rejected' }))
+    setSelectedIds(prev => { const n = new Set(prev); n.delete(rejectTarget.id); return n })
+    addHistoryEvent(rejectTarget.id, {
+      timestamp: new Date().toISOString(),
+      type: 'rejected',
+      actor: '나',
+      reason: rejectReason.trim(),
+    })
+    showToast(`${rejectTarget.sqlId} — 반려 처리되었습니다.`)
+    rejectConfirmedRef.current?.()
+    rejectConfirmedRef.current = null
+    setRejectTarget(null)
+    setRejectReason('')
+  }, [rejectTarget, rejectReason])
+
+  // ─── 일괄 확인 ─────────────────────────────────
+  const handleBulkVerify = useCallback(() => {
+    const ids = [...selectedIds]
+    const items = filteredItems.filter(w => ids.includes(w.id) && w.status === 'approval_pending')
+    if (items.length === 0) return
+    const estimatedCount = items.filter(w => w.executionResult === 'estimated').length
+    let msg = `${items.length}건을 일괄 확인 처리하시겠습니까?`
+    if (estimatedCount > 0) {
+      msg += `\n\n⚠ 예상 검증 ${estimatedCount}건 포함. 인덱스 생성이 필요합니다.`
+    }
+    setConfirmAction({
+      title: '일괄 확인', variant: 'warning', message: msg,
+      onConfirm: () => {
+        const overrides: Record<string, WorkItem['status']> = {}
+        items.forEach(w => { overrides[w.id] = 'apply_pending' })
+        setStatusOverrides(prev => ({ ...prev, ...overrides }))
+        setSelectedIds(new Set())
+        setConfirmAction(null)
+      },
+    })
+  }, [selectedIds, filteredItems])
+
+  // ─── 일괄 재튜닝 요청 (선택된 BE- 항목을 백엔드 detail 로 SQL 가져와서 새 튜닝 요청 생성) ─────────
+  const handleBulkRetune = useCallback(() => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    const items = filteredItems.filter(w => ids.includes(w.id))
+    const beItems = items.filter(it => it.id.startsWith('BE-'))
+    if (beItems.length === 0) {
+      showToast('재튜닝 가능한 항목이 없습니다 (백엔드 요청만 재튜닝 지원)', 'error')
+      return
+    }
+    setConfirmAction({
+      title: '튜닝 재요청', variant: 'warning',
+      message: `${beItems.length}건을 재튜닝 요청합니다. 새 튜닝 잡이 생성되며 LLM 파이프라인이 다시 실행됩니다.`,
+      onConfirm: () => {
+        setConfirmAction(null)
+        showToast(`${beItems.length}건 재튜닝 요청 전송 중...`)
+        Promise.allSettled(beItems.map(async it => {
+          console.log('[bulk-retune] item.id:', it.id, 'instanceId:', it.instanceId, 'instanceName:', it.instanceName)
+          const numericId = it.id.slice(3)
+          // detail API 에서 source SQL 본문 가져오기 (item.sqlText 는 100자 preview)
+          const d = await fetchTuningRequestDetail(numericId)
+          if (!d.source_sql_text) throw new Error(`source_sql_text 없음 (#${numericId})`)
+          // instance_id 매핑: instance_name → 첫 oracle inst id 후보
+          // 단순화: backend 가 instance_name 으로도 fallback 가능하다면 그대로 전달, 아니면 매핑 필요
+          // 여기선 item.instanceName 그대로 instance_id 슬롯에 넣고 백엔드 해석에 맡김 (실패 시 사용자 안내)
+          // [F-4] 같은 asis_sql_id_hash 의 max(N)+1 (단일 재튜닝과 동일 규칙)
+          const samples2 = await fetchTuningRequests({ limit: 1000 })
+          const myHash2 = samples2.find(s => s.id === numericId)?.asis_sql_id_hash
+          const cohort2 = myHash2 ? samples2.filter(s => s.asis_sql_id_hash === myHash2) : []
+          // [F-4] base = 최초 request alias, trailing strip
+          const cohortSorted2 = cohort2.slice().sort((a, b) => Number(a.id) - Number(b.id))
+          let baseAlias = stripRetuneSuffix(cohortSorted2[0]?.alias)
+          if (!baseAlias) baseAlias = stripRetuneSuffix(it.alias ?? it.workName ?? '')
+          if (!baseAlias) baseAlias = `튜닝_#${numericId}`
+          let maxN = 0
+          for (const s of cohort2) {
+            const a = (s.alias ?? '').trim()
+            const m = a.match(/_재튜닝\((\d+)\)$/)
+            if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n }
+          }
+          const newAlias = `${baseAlias}_재튜닝(${maxN + 1})`
+          // [F-5] 일괄 재튜닝 binds 재사용
+          const dBinds2 = ((d as unknown as { bind_variables?: Array<{name:string,data_type:string,value:string,position:number}> }).bind_variables) ?? []
+          return postTuningRequestsBatch({
+            batch_meta: {
+              request_group_name: buildDefaultGroupName('RETUNE', 'admin', 1),
+              request_source: 'V$SQL',
+              instance_id: it.instanceId ?? it.instanceName,
+            },
+            items: [{
+              sql_text: d.source_sql_text,
+              schema_name: it.schemaName || null,
+              binds: dBinds2.map(b => ({
+                name: b.name,
+                value: String(b.value ?? ''),
+                data_type: b.data_type ?? 'VARCHAR2',
+                position: b.position ?? undefined,
+              })),
+              auto_tune: true,
+              alias: newAlias,
+              parent_request_id: numericId,
+            }],
+          })
+        })).then(results => {
+          const ok = results.filter(r => r.status === 'fulfilled').length
+          const fail = results.length - ok
+          showToast(
+            fail === 0
+              ? `${ok}건 재튜닝 요청 접수됨`
+              : `${ok}건 접수 / ${fail}건 실패`,
+          )
+          setSelectedIds(new Set())
+        })
+      },
+    })
+  }, [selectedIds, filteredItems])
+
+  // ─── 일괄 삭제 (DB 에서 실제 삭제) ─────────────────────────────────
+  const handleBulkDelete = useCallback(() => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    // BE-{n} prefix 가 붙은 백엔드 항목만 실제 삭제 가능
+    const backendIds: string[] = []
+    const mockIds: string[] = []
+    for (const id of ids) {
+      if (id.startsWith('BE-')) {
+        const n = id.slice(3)
+        if (n) backendIds.push(n)
+      } else {
+        mockIds.push(id)
+      }
+    }
+    if (backendIds.length === 0 && mockIds.length === 0) return
+    let msg = `선택된 ${ids.length}건을 삭제하시겠습니까?`
+    if (backendIds.length > 0) {
+      msg += `\n\n백엔드 DB(tuning_requests / sql_plans / sql_performance) 에서 ${backendIds.length}건이 영구 삭제됩니다.`
+    }
+    if (mockIds.length > 0 && backendIds.length > 0) {
+      msg += `\n(로컬 목록 ${mockIds.length}건은 화면에서만 제거됩니다.)`
+    }
+    setConfirmAction({
+      title: '일괄 삭제', variant: 'danger', message: msg,
+      onConfirm: async () => {
+        try {
+          if (backendIds.length > 0) {
+            const res = await deleteTuningRequests(backendIds)
+            // 삭제 즉시 목록 반영: backendItems 에서 해당 id 제거
+            const deletedSet = new Set(res.deleted_request_ids.map(n => `BE-${n}`))
+            setBackendItems(prev => prev.filter(it => !deletedSet.has(it.id)))
+          }
+          if (mockIds.length > 0) {
+            const mockSet = new Set(mockIds)
+            // mock 항목은 backendItems 에는 없으므로 statusOverrides 에만 삭제 마킹이 필요하지만,
+            // 삭제는 DB 측 반영이 원칙이므로 여기서는 선택만 해제.
+            void mockSet
+          }
+          setSelectedIds(new Set())
+          setConfirmAction(null)
+        } catch (err) {
+          console.error('[deleteTuningRequests failed]', err)
+          alert(`삭제 실패: ${String(err)}`)
+        }
+      },
+    })
+  }, [selectedIds])
+
+  const handleTimeRangeChange = useCallback((start: Date, end: Date) => {
+    setStartTime(start)
+    setEndTime(end)
+  }, [])
+
+  const handleQuery = useCallback(() => {
+    setApplied({ dateStart: fmtIsoDate(startTime), dateEnd: fmtIsoDate(endTime), instance: selectedInstance, sqlId: sqlIdQuery, sqlText: sqlTextQuery, requesters: [...requesters], schemas: [...schemas], modules: [...modules], chips: [...filterChips], freeText, presets: [...activePresets] })
+  }, [startTime, endTime, selectedInstance, sqlIdQuery, sqlTextQuery, requesters, schemas, modules, filterChips, freeText, activePresets])
+
+const addChip = useCallback((prop: FilterProperty, value: string, valueLabel: string) => {
+    setFilterChips(prev => [...prev.filter(c => c.property !== prop.key), { property: prop.key, propertyLabel: prop.label, value, valueLabel }])
+    setFilterStep('property'); setSelectedFilterProp(null); setFilterQuery(''); setFilterBarFocused(false)
+  }, [])
+
+  const removeChip = useCallback((propertyKey: string) => {
+    setFilterChips(prev => prev.filter(c => c.property !== propertyKey))
+  }, [])
+
+  const clearAllChips = useCallback(() => {
+    setFilterChips([]); setFreeText('')
+  }, [])
+
+  // ─── 헬퍼: 개선율 표시 ──────────────────────────
+  const ImprovementPct = useCallback(({ value }: { value: number | null }) => {
+    if (value == null) return <span className="text-text-muted/40">—</span>
+    if (value > 0) return <span className="text-[11px] font-mono font-medium text-success">▼{value}%</span>
+    if (value < 0) return <span className="text-[11px] font-mono font-medium text-danger">▲{Math.abs(value)}%</span>
+    return <span className="text-[11px] font-mono text-text-muted">0%</span>
+  }, [])
+
+  const SOURCE_LABEL: Record<string, string> = { maxgauge: 'MaxGauge', awr: 'AWR', 'v$sql': 'V$SQL' }
+
+  const fmtElapsed = (ms: number | null | undefined) => ms != null && ms > 0 ? `${(ms / 1000).toFixed(2)}s` : '—'
+  const fmtBuffers = (v: number | null | undefined) => v != null && v > 0 ? v.toLocaleString() : '—'
+
+
+  // ─── DataTable 컬럼 정의 ───────────────────────
+  const columns = useMemo((): ColumnDef<WorkItem>[] => [
+    {
+      key: '_select',
+      header: (
+        <div className="text-center" onClick={e => e.stopPropagation()} title="현재 필터된 전체 선택/해제">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-border cursor-pointer"
+            checked={headerCheckChecked}
+            ref={(el) => { if (el) el.indeterminate = headerCheckIndeterminate }}
+            onChange={toggleSelectAll}
+            onClick={e => e.stopPropagation()}
+          />
+        </div>
+      ),
+      width: 40, minWidth: 40, resizable: false, draggable: false, sortable: false,
+      render: (_v, row) => {
+        const depth = itemDepth.get(row.id) ?? 0
+        const isParent = depth === 0 && childrenMap.has(row.id)
+        const isTreeChild = depth > 0
+        // 부모 행: 자신 + 자식 전체 체크 상태 판정
+        const treeItems = isParent ? [row, ...(childrenMap.get(row.id) ?? [])] : []
+        const treeCheckedCount = treeItems.filter(it => selectedIds.has(it.id)).length
+        const treeAllChecked = treeItems.length > 0 && treeCheckedCount === treeItems.length
+        const treeSomeChecked = treeCheckedCount > 0 && !treeAllChecked
+        return (
+          <div className="text-center" onClick={e => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border cursor-pointer"
+              checked={isParent ? treeAllChecked : selectedIds.has(row.id)}
+              ref={(el) => { if (el) el.indeterminate = isParent ? treeSomeChecked : false }}
+              onChange={(e) => {
+                e.stopPropagation()
+                if (isParent) handleGroupToggle(row, e.target.checked)
+                else toggleSelect(row.id)
+              }}
+              onClick={e => e.stopPropagation()}
+            />
+          </div>
+        )
+        void isTreeChild
+      },
+    },
+    {
+      key: 'createdAt', header: '요청일시', width: 80,
+      render: (v) => <span className="text-[11px] text-text-primary whitespace-nowrap">{formatDate(String(v))}</span>,
+    },
+    {
+      key: 'requestedBy', header: '요청자', width: 90,
+      render: (v) => <span className="text-[11px] text-text-primary truncate">{v ? String(v) : '—'}</span>,
+    },
+    {
+      key: 'alias', header: '별칭', width: 80,
+      render: (_v, row) => <AliasCell row={row as WorkItem} />,
+    },
+    {
+      key: 'sqlId', header: 'SQL ID', width: 100,
+      render: (_v, row) => (
+        <span className="text-xs font-mono font-bold text-text-primary truncate">{row.sqlId}</span>
+      ),
+    },
+    {
+      key: 'sqlText', header: 'SQL Text', width: 130,
+      render: (_v, row) => (
+        <p className="text-[11px] font-mono text-text-primary truncate">
+          {row.sqlText ? row.sqlText.replace(/\s+/g, ' ').slice(0, 80) + (row.sqlText.length > 80 ? '…' : '') : '—'}
+        </p>
+      ),
+    },
+    {
+      key: 'instanceName', header: '인스턴스', width: 70,
+      render: (v) => <span className="text-[11px] font-mono text-text-primary truncate">{String(v) || '—'}</span>,
+    },
+    {
+      key: 'schemaName', header: '스키마', width: 70,
+      render: (v) => <span className="text-[11px] font-mono text-text-primary truncate">{v ? String(v) : '—'}</span>,
+    },
+    {
+      key: 'module', header: '모듈', width: 90,
+      render: (_v, row) => {
+        const m = (row as unknown as { module?: string }).module
+        return <span className="text-[11px] font-mono text-text-primary truncate">{m || '—'}</span>
+      },
+    },
+    {
+      key: 'selectionSource', header: '소스', width: 60, align: 'center',
+      render: (v) => {
+        if (v === 'auto') return <span className="inline-flex items-center justify-center text-[11px] px-1.5 py-0.5 rounded bg-surface-muted text-text-muted whitespace-nowrap">자동</span>
+        if (v === 'direct_verify') return <span className="inline-flex items-center justify-center text-[11px] px-1.5 py-0.5 rounded bg-info-bg text-info-dark border border-info/20 whitespace-nowrap">직접검증</span>
+        if (v === 'manual') return <span className="inline-flex items-center justify-center text-[11px] px-1.5 py-0.5 rounded bg-surface-muted text-text-secondary border border-border whitespace-nowrap">수동</span>
+        return <span className="text-[11px] text-text-muted/40">—</span>
+      },
+    },
+    {
+      key: '_selectionReason', header: '선정근거', width: 90,
+      render: (_v, row) => {
+        if (row.selectionSource === 'auto') {
+          return (
+            <div className="text-[11px] text-text-primary truncate">
+              {SOURCE_LABEL[row.source] || row.source} 자동선정
+            </div>
+          )
+        }
+        if (row.selectionSource === 'direct_verify') {
+          return (
+            <div>
+              <div className="text-[11px] text-text-primary truncate">직접검증 요청</div>
+              {row.requestedBy && <div className="text-[11px] text-text-primary truncate">{row.requestedBy}</div>}
+            </div>
+          )
+        }
+        return <span className="text-[11px] text-text-muted/40">수동 등록</span>
+      },
+    },
+
+    {
+      key: 'estimatedDailyExec', header: '수행횟수', width: 60, align: 'right',
+      render: (v) => (
+        <span className="text-[11px] font-mono text-text-primary whitespace-nowrap">
+          {v != null ? `${Number(v).toLocaleString()}회/일` : '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'status', header: '상태', width: 90,
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'tuning') {
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              <CostSweepHero size="xs" color="blue" animated className="shrink-0" />
+              <span className="text-[11px] text-text-primary">{STATUS_LABELS[st]}</span>
+            </span>
+          )
+        }
+        // 튜닝완료: 동일 인디케이터, 녹색·정적 — "AI가 만든 결과"
+        if (st === 'approval_pending') {
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              <CostSweepHero size="xs" color="green" animated={false} className="shrink-0" />
+              <span className="text-[11px] text-text-primary">{STATUS_LABELS[st]}</span>
+            </span>
+          )
+        }
+        const Icon = STATUS_OWNER_ICON[st]
+        return (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-5 inline-flex items-center justify-center shrink-0">
+              <Icon size={12} className={STATUS_OWNER_ICON_COLOR[st]} />
+            </span>
+            <span className="text-[11px] text-text-primary">{STATUS_LABELS[st]}</span>
+          </span>
+        )
+      },
+    },
+    {
+      key: 'recommendationTypes', header: '튜닝 내용', width: 100,
+      render: (_v, row) => {
+        const types = row.recommendationTypes
+        if (!types || types.length === 0) return <span className="text-xs text-text-muted">—</span>
+        return (
+          <span className="text-xs text-text-primary">
+            {types.map(t => t === 'index' ? '인덱스' : t === 'hint' ? '힌트' : 'Rewrite').join(' · ')}
+          </span>
+        )
+      },
+    },
+    {
+      key: '_elapsed_before', header: 'Before', group: 'Elapsed', width: 70, align: 'right', sortable: false,
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        return <span className="text-[11px] font-mono text-text-secondary whitespace-nowrap">{fmtElapsed(row.originalElapsed)}</span>
+      },
+    },
+    {
+      key: '_elapsed_after', header: 'After', group: 'Elapsed', width: 70, align: 'right', sortable: false,
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        return <span className="text-[11px] font-mono text-text-primary font-medium whitespace-nowrap">{fmtElapsed(row.tunedElapsed)}</span>
+      },
+    },
+    {
+      key: '_elapsed_rate', header: '개선', group: 'Elapsed', width: 60, align: 'right', sortable: true,
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        const rate = calcElapsedRate(row)
+        if (rate == null || rate === 0) return <span className="text-[11px] text-text-muted/40">—</span>
+        return (
+          <span className={`text-[11px] font-mono font-medium whitespace-nowrap ${rate > 0 ? 'text-success' : 'text-danger'}`}>{rate > 0 ? '▼' : '▲'}{Math.abs(rate)}%</span>
+        )
+      },
+    },
+    {
+      key: '_buffers_before', header: 'Before', group: 'Buffers', width: 75, align: 'right', sortable: false,
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        return <span className="text-[11px] font-mono text-text-secondary whitespace-nowrap">{fmtBuffers(row.originalBuffers)}</span>
+      },
+    },
+    {
+      key: '_buffers_after', header: 'After', group: 'Buffers', width: 75, align: 'right', sortable: false,
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        return <span className="text-[11px] font-mono text-text-primary font-medium whitespace-nowrap">{fmtBuffers(row.tunedBuffers)}</span>
+      },
+    },
+    {
+      key: '_buffers_rate', header: '개선', group: 'Buffers', width: 60, align: 'right', sortable: true,
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        const rate = calcBuffersRate(row)
+        if (rate == null || rate === 0) return <span className="text-[11px] text-text-muted/40">—</span>
+        return (
+          <span className={`text-[11px] font-mono font-medium whitespace-nowrap ${rate > 0 ? 'text-success' : 'text-danger'}`}>
+            {rate > 0 ? '▼' : '▲'}{Math.abs(rate)}%
+          </span>
+        )
+      },
+    },
+    {
+      key: 'executionResult', header: '실측/예상', width: 70, align: 'center',
+      render: (v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        if (!v) return <span className="text-[11px] text-text-muted/40">—</span>
+        if (v === 'timeout') return <span className="text-[11px] px-1.5 py-px rounded bg-warning-bg text-warning border border-warning/20 whitespace-nowrap">△ T/O</span>
+        if (v === 'completed') return <span className="text-[11px] px-1.5 py-px rounded bg-success-bg text-success border border-success/20 whitespace-nowrap">✓ 실측</span>
+        return <span className="text-[11px] px-1.5 py-px rounded bg-surface-muted text-text-muted border border-border whitespace-nowrap">⚠ 예상</span>
+      },
+    },
+    {
+      key: 'integrityResult', header: '결과일치', width: 60, align: 'center',
+      render: (v, row) => {
+        const st = getStatus(row)
+        if (st === 'pending' || st === 'tuning') return <span className="text-[11px] text-text-muted/40">—</span>
+        if (!v || v === 'pending') return <span className="text-[11px] text-text-muted/40">—</span>
+        if (v === 'match') return <span className="text-[11px] px-1.5 py-px rounded bg-success-bg text-success border border-success/20 whitespace-nowrap">✓ 일치</span>
+        if (v === 'mismatch') return <span className="text-[11px] px-1.5 py-px rounded bg-danger-bg text-danger border border-danger/20 whitespace-nowrap">✗ 불일치</span>
+        return <span className="text-[11px] px-1.5 py-px rounded bg-warning-bg text-warning border border-warning/20 whitespace-nowrap">⚠ 미확인</span>
+      },
+    },
+    {
+      key: '_actions', header: '빠른 액션', width: 110, resizable: false, draggable: false, sortable: false, align: 'center',
+      render: (_v, row) => {
+        const st = getStatus(row)
+        if (st === 'approval_pending') return (
+          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-100" onClick={e => e.stopPropagation()}>
+            <button onClick={() => handleVerify(row)}
+              className="px-2 py-0.5 text-[11px] font-medium text-text-primary border border-border hover:bg-surface-muted rounded transition-colors">
+              확인
+            </button>
+            <button onClick={() => { setRejectTarget(row); setRejectReason('') }}
+              className="px-2 py-0.5 text-[11px] font-medium text-text-muted hover:text-danger hover:bg-danger-bg rounded transition-colors">
+              반려
+            </button>
+            <button onClick={() => handleRetune(row)}
+              className="px-2 py-0.5 text-[11px] font-medium text-text-muted hover:text-warning hover:bg-warning-bg rounded transition-colors">
+              재튜닝
+            </button>
+          </div>
+        )
+        if (st === 'pending') return (
+          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-100" onClick={e => e.stopPropagation()}>
+            <button onClick={() => handlePrioritize(row)}
+              className="px-2 py-0.5 text-[11px] font-medium text-text-primary border border-border hover:bg-surface-muted rounded transition-colors whitespace-nowrap">
+              우선처리
+            </button>
+            <button onClick={() => handleCancel(row)}
+              className="px-2 py-0.5 text-[11px] font-medium text-text-muted hover:text-danger hover:bg-danger-bg rounded transition-colors">
+              취소
+            </button>
+          </div>
+        )
+        if (st === 'tuning') return (
+          <div className="flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-100" onClick={e => e.stopPropagation()}>
+            <button onClick={() => handleCancel(row)}
+              className="px-2 py-0.5 text-[11px] font-medium text-text-muted hover:text-danger hover:bg-danger-bg rounded transition-colors">
+              취소
+            </button>
+          </div>
+        )
+        return <span className="text-xs text-text-muted/40">—</span>
+      },
+    },
+    {
+      key: '_workbench', header: '', width: 36, minWidth: 36, resizable: false, draggable: false, sortable: false,
+      render: (_v, row) => (
+        <div className="flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-100" onClick={e => e.stopPropagation()}>
+          <button
+            onClick={() => enterWorkspace(row)}
+            className="p-1 rounded text-text-muted hover:text-code hover:bg-code-bg transition-colors"
+            title="워크스페이스에서 상세 검토"
+          >
+            <Maximize2 size={13} />
+          </button>
+        </div>
+      ),
+    },
+  ], [selectedIds, toggleSelect, toggleSelectAll, handleGroupToggle, headerCheckChecked, headerCheckIndeterminate, handleVerify, handleRetune, handleCancel, handlePrioritize, getStatus, ImprovementPct, itemDepth, childrenMap, displayItems])
+
+  // 컬럼 순서 반영 + 숨김 필터
+  const orderedColumns = useMemo(() => {
+    if (!columnOrder) return columns
+    // columnOrder 기준, 새로 추가된 컬럼은 뒤에 붙임
+    const keySet = new Set(columnOrder.map(c => c.key))
+    const reordered = columnOrder.map(oc => columns.find(c => c.key === oc.key)!).filter(Boolean)
+    columns.forEach(c => { if (!keySet.has(c.key)) reordered.push(c) })
+    return reordered
+  }, [columns, columnOrder])
+
+  const visibleColumns = useMemo(() => orderedColumns.filter(c => !hiddenCols.has(c.key)), [orderedColumns, hiddenCols])
+
+  // 정렬 적용
+  const sortedItems = useMemo(() => {
+    if (!sortState.key || !sortState.direction) return displayItems
+    const key = sortState.key
+    const dir = sortState.direction === 'asc' ? 1 : -1
+    // 파생 키 (2중 헤더 개선율) 매핑
+    const deriveVal = (row: WorkItem): number | string | null | undefined => {
+      if (key === '_elapsed_rate') return calcElapsedRate(row)
+      if (key === '_buffers_rate') return calcBuffersRate(row)
+      return (row as unknown as Record<string, unknown>)[key] as number | string | null | undefined
+    }
+    // 루트 행끼리만 정렬, 자식은 루트 바로 뒤 유지
+    const rootRows: WorkItem[] = []
+    // parentId → rootId 역추적 맵
+    const childToRoot = new Map<string, string>()
+    for (const row of displayItems) {
+      const depth = itemDepth.get(row.id) ?? 0
+      if (depth === 0) {
+        rootRows.push(row)
+        const ch = childrenMap.get(row.id) ?? []
+        for (const c of ch) childToRoot.set(c.id, row.id)
+      }
+    }
+    rootRows.sort((a, b) => {
+      const av = deriveVal(a); const bv = deriveVal(b)
+      if (av == null && bv == null) return 0
+      if (av == null) return 1; if (bv == null) return -1
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
+      return String(av).localeCompare(String(bv)) * dir
+    })
+    // displayItems를 루트 순서대로 재배치 (자식은 루트 바로 뒤)
+    const grouped = new Map<string, WorkItem[]>()
+    for (const row of displayItems) {
+      const depth = itemDepth.get(row.id) ?? 0
+      const rootId = depth === 0 ? row.id : (childToRoot.get(row.id) ?? row.id)
+      const arr = grouped.get(rootId) ?? []
+      arr.push(row)
+      grouped.set(rootId, arr)
+    }
+    const result: WorkItem[] = []
+    for (const root of rootRows) {
+      for (const row of grouped.get(root.id) ?? []) result.push(row)
+    }
+    return result
+  }, [displayItems, sortState, itemDepth, childrenMap])
+
+  // 토글 가능 컬럼 (체크박스/액션/필수 컬럼 제외)
+  // 필수(required) 컬럼: sqlId, sqlText, status, recommendationTypes — 사용자가 숨길 수 없음
+  const REQUIRED_COLUMNS = new Set(['sqlId', 'sqlText', 'status', 'recommendationTypes'])
+  const TOGGLE_COLUMNS = useMemo(() =>
+    columns
+      .filter(c => c.key !== '_select' && c.key !== '_actions' && c.key !== '_workbench' && !REQUIRED_COLUMNS.has(c.key))
+      .map(c => c.key),
+    [columns]
+  )
+  const COLUMN_LABELS: Record<string, string> = {
+    createdAt: '요청일시', alias: '별칭', sqlId: 'SQL ID', sqlText: 'SQL Text',
+    instanceName: '인스턴스', schemaName: '스키마', module: '모듈',
+    selectionSource: '소스', _selectionReason: '선정근거',
+    estimatedDailyExec: '수행횟수', requestedBy: '요청자', status: '상태', recommendationTypes: '튜닝 내용',
+    _elapsed: 'Elapsed', _buffers: 'Buffers',
+    _elapsed_before: 'Before Elapsed(s)', _elapsed_after: 'After Elapsed(s)', _elapsed_rate: 'Elapsed 개선(%)',
+    _buffers_before: 'Before Buffers', _buffers_after: 'After Buffers', _buffers_rate: 'Buffers 개선(%)',
+    executionResult: '실측/예상', integrityResult: '결과일치',
+  }
+
+  const handleCsvExport = useCallback(() => {
+    const visibleCols = columns.filter(c =>
+      c.key !== '_select' && c.key !== '_actions' && c.key !== '_workbench' &&
+      (REQUIRED_COLUMNS.has(c.key) || !hiddenCols.has(c.key))
+    )
+    const headerRow = visibleCols.map(c => COLUMN_LABELS[c.key] || c.key)
+    const esc = (v: unknown) => {
+      if (v === null || v === undefined) return ''
+      const s = String(v).replace(/\r?\n/g, ' ').replace(/\t/g, ' ').replace(/\s+/g, ' ').trim()
+      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
+      return s
+    }
+    const EXPORT_VALUE: Record<string, (row: WorkItem) => string | number | null | undefined> = {
+      _elapsed_before: (row) => row.originalElapsed != null ? (row.originalElapsed / 1000).toFixed(2) : '',
+      _elapsed_after:  (row) => row.tunedElapsed    != null ? (row.tunedElapsed / 1000).toFixed(2) : '',
+      _elapsed_rate:   (row) => { const r = calcElapsedRate(row); return r != null ? r : '' },
+      _buffers_before: (row) => row.originalBuffers  != null ? row.originalBuffers : '',
+      _buffers_after:  (row) => row.tunedBuffers     != null ? row.tunedBuffers : '',
+      _buffers_rate:   (row) => { const r = calcBuffersRate(row); return r != null ? r : '' },
+    }
+    const bodyRows = sortedItems.map(row =>
+      visibleCols.map(c => {
+        const rawAny = row as unknown as Record<string, unknown>
+        let v: unknown = EXPORT_VALUE[c.key]?.(row) ?? rawAny[c.key]
+        if (c.key === 'createdAt') v = formatDate(String(v || ''))
+        if (c.key === 'recommendationTypes' && Array.isArray(v)) v = (v as unknown[]).join('|')
+        if (c.key === 'status') v = STATUS_LABELS[String(v)] ?? v
+        return esc(v)
+      }).join(',')
+    )
+    const csv = '\uFEFF' + [headerRow.map(esc).join(','), ...bodyRows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const ts = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const stamp = `${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`
+    a.href = url
+    a.download = `tuning_status_${stamp}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [columns, hiddenCols, sortedItems])
+
+
+
+  // ─── 네비게이션 ─────────────────────────────────
+  const navigateToDetail = useCallback((item: WorkItem, _ri: number, e?: React.MouseEvent) => {
+    if (e) {
+      const target = e.target as HTMLElement
+      if (target.closest('button') || target.closest('input[type="checkbox"]')) return
+    }
+    if (e && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      window.open(`/work?detail=${item.id}`, '_blank')
+      return
+    }
+    setPanelItem(item)
+  }, [])
+
+  // ─── 렌더 ───────────────────────────────────────
+  const selectedTunedCount = [...selectedIds].filter(id => {
+    const it = filteredItems.find(w => w.id === id)
+    return it && it.status === 'approval_pending'
+  }).length
+
+  return (
+    <div className={`flex flex-col h-[calc(100vh/1.1-40px)] overflow-hidden ${pageView === 'list' ? '-m-6 p-6 space-y-3' : '-m-6'}`}>
+
+      {/* ═══ WORKSPACE 뷰 — 인라인 워크벤치 (SlidePanel 아님) ═══ */}
+      {pageView === 'workspace' && workspaceItem && (
+        <ErrorBoundary fallback={
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-text-muted p-8">
+            <span>워크스페이스 렌더 오류. 상세 패널로 복귀해 주세요.</span>
+            <button
+              className="px-3 py-1.5 rounded text-sm bg-surface-raised border border-border hover:bg-action/10 text-text-primary"
+              onClick={exitWorkspace}
+            >← 목록으로</button>
+          </div>
+        }>
+          <WorkbenchContent
+            item={workspaceItem}
+            filteredItems={filteredItems}
+            getStatus={getStatus}
+            onItemSelect={(item) => setWorkspaceItem(item)}
+            onClose={exitWorkspace}
+            onStatusChange={(id, status) => setStatusOverrides(prev => ({ ...prev, [id]: status }))}
+            onReject={(item) => {
+              setRejectTarget(item)
+              rejectConfirmedRef.current = null
+            }}
+            onShowToast={showToast}
+            onConfirmAction={setConfirmAction}
+            onDirectInputCreated={(id) => {
+              setHighlightId(id)
+              exitWorkspace()
+            }}
+            onNavigateToExisting={(id) => {
+              const found = backendItems.find(w => w.id === id)
+              if (found) setWorkspaceItem(found)
+            }}
+          />
+        </ErrorBoundary>
+      )}
+
+      {/* ═══ LIST 뷰 — 기존 필터 + 테이블 + peek 패널 ═══ */}
+      {pageView === 'list' && <>
+      {/* 조회조건 바 (접기/펼치기) */}
+      {(() => {
+        const arrayEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
+        const isDirty =
+          fmtIsoDate(startTime) !== applied.dateStart ||
+          fmtIsoDate(endTime) !== applied.dateEnd ||
+          selectedInstance !== applied.instance ||
+          sqlIdQuery !== applied.sqlId ||
+          sqlTextQuery !== applied.sqlText ||
+          JSON.stringify(requesters) !== JSON.stringify(applied.requesters) ||
+          !arrayEq(schemas, applied.schemas) ||
+          !arrayEq(modules, applied.modules)
+
+        return (
+        <div className="flex items-center gap-2 rounded-lg bg-surface-alt px-3 py-1.5 flex-wrap">
+          <select value={selectedInstance} onChange={e => setSelectedInstance(e.target.value)}
+            className="h-7 text-xs border border-border rounded-md px-2 focus:outline-none focus:ring-1 focus:ring-action/30 bg-white">
+            <option value="">전체 인스턴스</option>
+            {instances.map(inst => <option key={inst} value={inst}>{inst}</option>)}
+          </select>
+          <TimeRangePicker startTime={startTime} endTime={endTime} onChange={handleTimeRangeChange} />
+          <MultiSelect label="스키마" options={SCHEMAS} selected={schemas} onChange={setSchemas} />
+          <MultiSelect label="모듈" options={MODULES} selected={modules} onChange={setModules} />
+          <input
+            type="text"
+            value={sqlIdQuery}
+            onChange={e => setSqlIdQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleQuery() }}
+            placeholder="SQL ID"
+            className="h-7 text-xs font-mono border border-border rounded-md px-2 w-[120px] focus:outline-none focus:ring-1 focus:ring-action/30 bg-white placeholder:text-text-muted"
+          />
+          <input
+            type="text"
+            value={sqlTextQuery}
+            onChange={e => setSqlTextQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleQuery() }}
+            placeholder="SQL Text"
+            className="h-7 text-xs font-mono border border-border rounded-md px-2 flex-1 min-w-[120px] focus:outline-none focus:ring-1 focus:ring-action/30 bg-white placeholder:text-text-muted"
+          />
+          <MultiSelect label="요청자" options={[]} selected={requesters} onChange={setRequesters} emptyText="사용자 명세 확정 후 활성화" />
+          <div className="ml-auto">
+            <button
+              onClick={handleQuery}
+              className={`shrink-0 h-7 rounded-md px-4 text-xs font-semibold text-white transition-colors inline-flex items-center justify-center ${
+                isDirty ? 'bg-action hover:bg-action-hover ring-2 ring-info/40' : 'bg-action hover:bg-action-hover'
+              }`}
+            >
+              조회{isDirty ? ' •' : ''}
+            </button>
+          </div>
+        </div>
+        )
+      })()}
+
+      {/* 상태 필터 파이프라인 + 뷰 토글 */}
+      {(() => {
+        const cnt = (k: string) => (statusCounts as Record<string,number>)[k] || 0
+        const totalCount = Object.entries(statusCounts).reduce((a, [k, v]) => k === 'scheduled' ? a : a + v, 0)
+
+        type BtnDef = { key: WorkItem['status'] | 'all' | 'applied_all' | 'approved_all'; label: string; dot: string; count: number }
+        const groups: BtnDef[][] = [
+          [{ key: 'all', label: '전체', dot: '', count: totalCount }],
+          [{ key: 'pending', label: '튜닝대기', dot: STATUS_DOT_COLOR.pending, count: cnt('pending') }],
+          [
+            { key: 'tuning', label: '튜닝중', dot: STATUS_DOT_COLOR.tuning, count: cnt('tuning') },
+            { key: 'failed', label: '실패', dot: STATUS_DOT_COLOR.failed, count: cnt('failed') },
+            { key: 'cancelled', label: '취소', dot: STATUS_DOT_COLOR.cancelled, count: cnt('cancelled') },
+          ],
+          [
+            { key: 'approval_pending', label: '튜닝완료', dot: STATUS_DOT_COLOR.approval_pending, count: cnt('approval_pending') },
+            { key: 'no_improve', label: '개선없음', dot: STATUS_DOT_COLOR.no_improve, count: cnt('no_improve') },
+          ],
+          [
+            { key: 'approved_all' as any, label: '승인완료', dot: STATUS_DOT_COLOR.applied, count: cnt('apply_pending') + cnt('applied') + cnt('fulfilled') },
+            { key: 'rejected', label: '반려', dot: STATUS_DOT_COLOR.rejected, count: cnt('rejected') },
+          ],
+        ]
+
+        const btnCls = (active: boolean, isFirst: boolean, isLast: boolean) =>
+          `h-8 px-3 text-[11px] font-semibold transition-all flex items-center gap-1.5 border ` +
+          (isFirst && isLast ? 'rounded-lg ' : isFirst ? 'rounded-l-lg border-r-0 ' : isLast ? 'rounded-r-lg ' : 'border-r-0 ') +
+          (active
+            ? 'bg-action text-white border-action z-10 relative'
+            : 'bg-surface-alt text-text-secondary border-border hover:bg-surface-muted')
+
+        return (
+          <div className="flex items-center gap-1.5">
+            {groups.map((group, gi) => (
+              <div key={gi} className="flex items-center">
+                {gi === 1 && <div className="w-3" />}
+                {gi > 1 && (
+                  <svg className="shrink-0 text-border mr-1.5" width="12" height="12" viewBox="0 0 16 16" fill="none">
+                    <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+                <div className="inline-flex">
+                  {group.map((s, bi) => {
+                    const filterKey = s.key === 'applied_all' ? 'applied' as const : s.key === 'approved_all' ? 'approved_all' as any : s.key === 'all' ? 'all' : s.key as WorkItem['status']
+                    const active = statusFilter === filterKey || (statusFilter === ('approved_all' as any) && (filterKey === 'apply_pending' || filterKey === 'applied'))
+                    return (
+                      <button key={s.key} onClick={() => setStatusFilter(filterKey)}
+                        className={btnCls(active, bi === 0, bi === group.length - 1)}>
+                        {s.dot && <span className={`size-1.5 rounded-full shrink-0 ${active ? 'bg-white/70' : s.dot}`} />}
+                        {s.label}
+                        <span className={`tabular-nums text-[10px] ${active ? 'text-white/60' : 'text-text-muted'}`}>{s.count}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+      <div className="flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-2">
+          <div className="inline-flex rounded-md border border-border bg-surface-alt p-0.5">
+            <button onClick={() => { setViewMode('items'); localStorage.setItem('workPipelineViewMode', 'items') }}
+              className={`px-3 py-1 text-xs font-medium rounded transition-all duration-[var(--duration-fast)] ${
+                viewMode === 'items'
+                  ? 'bg-white text-text-primary shadow-sm'
+                  : 'text-text-muted hover:text-text-secondary'
+              }`}>
+              리스트 뷰
+            </button>
+            <button onClick={() => { setViewMode('groups'); localStorage.setItem('workPipelineViewMode', 'groups') }}
+              className={`px-3 py-1 text-xs font-medium rounded transition-all duration-[var(--duration-fast)] ${
+                viewMode === 'groups'
+                  ? 'bg-white text-text-primary shadow-sm'
+                  : 'text-text-muted hover:text-text-secondary'
+              }`}>
+              그룹 뷰
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Property Filter Bar */}
+      <div className="flex items-start gap-2">
+        <div className="relative flex-1 min-w-0" ref={filterBarRef}>
+          <div
+            className={`flex flex-wrap items-center gap-1.5 rounded-md border bg-white px-3 py-1 min-h-[30px] cursor-text transition-colors ${
+              filterBarFocused ? 'border-action ring-1 ring-action/30' : 'border-border'
+            }`}
+          onClick={() => { filterInputRef.current?.focus(); setFilterBarFocused(true) }}
+        >
+          <Search size={14} className="text-text-muted shrink-0" />
+          {filterChips.length > 0 && <div className="h-4 w-px bg-border shrink-0" />}
+          {filterChips.map(chip => (
+            <span key={chip.property} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-text-primary">
+              <span className="text-text-muted">{chip.propertyLabel}</span>
+              <span className="text-text-muted">=</span>
+              <span className="font-medium">{chip.valueLabel}</span>
+              <button type="button" onClick={e => { e.stopPropagation(); removeChip(chip.property) }}
+                className="ml-0.5 text-text-muted hover:text-text-primary transition-colors">✕</button>
+            </span>
+          ))}
+          {freeText && !filterBarFocused && (
+            <span className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-text-primary">
+              <span className="font-medium">{freeText}</span>
+              <button type="button" onClick={e => { e.stopPropagation(); setFreeText('') }}
+                className="ml-0.5 text-text-muted hover:text-text-primary transition-colors">✕</button>
+            </span>
+          )}
+          <input ref={filterInputRef} type="text"
+            className="flex-1 min-w-[160px] border-0 outline-none text-xs bg-transparent placeholder:text-text-muted"
+            placeholder={filterChips.length > 0 || freeText ? '필터 추가 또는 SQL ID/Text 검색...' : 'SQL ID · SQL Text 검색, 또는 필터 추가...'}
+            value={filterBarFocused ? filterQuery : ''}
+            onChange={e => setFilterQuery(e.target.value)}
+            onFocus={() => { setFilterBarFocused(true); setFilterStep('property') }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && filterQuery && filterStep === 'property') {
+                setFreeText(filterQuery); setFilterQuery(''); setFilterBarFocused(false)
+              }
+              if (e.key === 'Backspace' && !filterQuery && filterChips.length > 0) removeChip(filterChips[filterChips.length - 1].property)
+              if (e.key === 'Escape') { setFilterBarFocused(false); setFilterStep('property'); setSelectedFilterProp(null); setFilterQuery('') }
+            }}
+          />
+          {(filterChips.length > 0 || freeText) && (
+            <button type="button" onClick={e => { e.stopPropagation(); clearAllChips() }}
+              className="text-[11px] text-text-muted hover:text-text-primary whitespace-nowrap transition-colors">모두 지우기</button>
+          )}
+        </div>
+        {filterBarFocused && (
+          <div className="absolute top-full left-0 right-0 z-50 mt-1 rounded-lg border border-border bg-white shadow-md max-h-64 overflow-y-auto">
+            {filterStep === 'property' ? (
+              <div className="p-1">
+                <p className="px-3 py-1.5 text-[10px] text-text-muted font-medium uppercase tracking-wide">프로퍼티 선택</p>
+                {FILTER_PROPERTIES
+                  .filter(p => !filterChips.some(c => c.property === p.key))
+                  .filter(p => !filterQuery || p.label.includes(filterQuery))
+                  .map(prop => (
+                    <button key={prop.key} type="button"
+                      onClick={() => { setSelectedFilterProp(prop); setFilterStep('value'); setFilterQuery('') }}
+                      className="w-full text-left rounded-md px-3 py-2 text-xs text-text-primary hover:bg-surface-muted transition-colors">
+                      {prop.label} <span className="text-text-muted ml-1 text-[11px]">({prop.options.length})</span>
+                    </button>
+                  ))}
+                {filterQuery && (
+                  <>
+                    <div className="border-t border-border my-1" />
+                    <button type="button"
+                      onClick={() => { setFreeText(filterQuery); setFilterQuery(''); setFilterBarFocused(false) }}
+                      className="w-full text-left rounded-md px-3 py-2 text-xs text-text-secondary hover:bg-surface-muted transition-colors">
+                      <span className="text-text-muted">전체 검색:</span> &quot;{filterQuery}&quot;
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : selectedFilterProp ? (
+              <div className="p-1">
+                <div className="flex items-center gap-2 px-3 py-1.5">
+                  <button type="button" onClick={() => { setFilterStep('property'); setSelectedFilterProp(null); setFilterQuery('') }}
+                    className="text-text-muted hover:text-text-primary text-[11px] transition-colors">← 뒤로</button>
+                  <span className="text-[10px] text-text-muted font-medium uppercase tracking-wide">{selectedFilterProp.label} =</span>
+                </div>
+                {selectedFilterProp.options
+                  .filter(o => !filterQuery || o.label.includes(filterQuery))
+                  .map(opt => (
+                    <button key={opt.value} type="button" onClick={() => addChip(selectedFilterProp, opt.value, opt.label)}
+                      className="w-full text-left rounded-md px-3 py-2 text-xs text-text-primary hover:bg-surface-muted transition-colors">{opt.label}</button>
+                  ))}
+              </div>
+            ) : null}
+          </div>
+        )}
+        </div>
+      </div>
+
+      {/* 자동 제외 Meta (예외/중복) + 직접 튜닝요청 */}
+      <div className="flex items-center gap-3 text-xs">
+        {exceptionCancelledCount > 0 && (
+          <button
+            onClick={() => setStatusFilter('cancelled')}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-text-muted hover:bg-surface-muted hover:text-text-secondary transition-colors self-start"
+            title="취소됨 상태로 필터링"
+          >
+            <Ban className="h-3 w-3" />
+            예외 정책으로 자동 작업 <span className="font-medium text-text-secondary">{exceptionCancelledCount}건</span> 취소됨
+            <span className="text-[10px] text-text-muted">→ 보기</span>
+          </button>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleCsvExport}
+            className="p-1.5 rounded-md border border-border text-text-muted hover:text-text-secondary hover:bg-surface-muted transition-colors"
+            title="CSV 내보내기"
+          >
+            <Download size={14} />
+          </button>
+          <div className="relative" ref={colToggleRef}>
+            <button
+              onClick={() => setColToggleOpen(p => !p)}
+              className={`p-1.5 rounded-md border transition-colors ${colToggleOpen ? 'border-action bg-surface-muted text-text-primary' : 'border-border text-text-muted hover:text-text-secondary hover:bg-surface-muted'}`}
+              title="컬럼 표시 설정"
+            >
+              <SlidersHorizontal size={14} />
+            </button>
+            {colToggleOpen && (
+              <div className="absolute right-0 top-full mt-1 z-20 w-44 rounded-lg border border-border bg-white shadow-lg py-1">
+                <p className="px-3 py-1.5 text-[10px] font-medium text-text-muted uppercase tracking-wide">컬럼 표시</p>
+                <div className="max-h-[280px] overflow-y-auto">
+                {TOGGLE_COLUMNS.map(key => (
+                  <label key={key} className="flex items-center gap-2 px-3 py-1.5 text-xs text-text-primary hover:bg-surface-muted cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-border"
+                      checked={!hiddenCols.has(key)}
+                      onChange={() => setHiddenCols(prev => {
+                        const next = new Set(prev)
+                        if (next.has(key)) next.delete(key); else next.add(key)
+                        return next
+                      })}
+                    />
+                    {COLUMN_LABELS[key] || key}
+                  </label>
+                ))}
+                </div>
+                <div className="border-t border-border mt-1 pt-1 px-3 pb-1.5">
+                  <button onClick={() => setHiddenCols(new Set(DEFAULT_HIDDEN))} className="text-[11px] text-text-muted hover:text-text-primary transition-colors">초기화</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 그룹 뷰 */}
+      {viewMode === 'groups' && (
+        <GroupView
+          filteredItems={filteredItems}
+          visibleColumns={visibleColumns}
+          navigateToDetail={navigateToDetail}
+          highlightId={highlightId}
+          getStatus={getStatus}
+          selectedIds={selectedIds}
+          toggleSelect={toggleSelect}
+          onGroupToggle={(groupItems, checked) => {
+            setSelectedIds(prev => {
+              const next = new Set(prev)
+              for (const it of groupItems) {
+                if (checked) next.add(it.id)
+                else next.delete(it.id)
+              }
+              return next
+            })
+          }}
+        />
+      )}
+
+      {/* 목록 보기: DataTable */}
+      {viewMode === 'items' && (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <DataTable
+            columns={[
+              {
+                key: '_tree', header: '', width: 36, sortable: false,
+                render: (_v, row) => {
+                  const depth = itemDepth.get(row.id) ?? 0
+                  // child 행: └ 커넥터
+                  if (depth > 0) {
+                    return <span className="text-border/70 text-[13px] leading-none">└</span>
+                  }
+                  // root 행: 자식 있을 때 펼치기/접기 chevron 버튼
+                  const childCount = (childrenMap.get(row.id) ?? []).length
+                  if (childCount === 0) return null
+                  const isCollapsed = !expandedRowIds.has(row.id)
+                  return (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleRowCollapse(row.id) }}
+                      className={`inline-flex items-center gap-0.5 px-1.5 py-1 rounded cursor-pointer ${isCollapsed ? 'text-text-secondary' : 'text-action'}`}
+                      title={isCollapsed ? `펼치기 (${childCount}건)` : '접기'}
+                    >
+                      <ChevronRight size={13} className={`shrink-0 transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />
+                      <span className="text-[11px] font-medium tabular-nums">{childCount}</span>
+                    </button>
+                  )
+                },
+              } as ColumnDef<WorkItem>,
+              ...visibleColumns,
+            ]}
+            data={sortedItems}
+            rowKey="id"
+            onRowClick={(row, ri, e) => navigateToDetail(row, ri, e)}
+            onColumnsChange={(cols) => setColumnOrder(cols as ColumnDef<WorkItem>[])}
+            rowClassName={(row) => {
+              const depth = itemDepth.get(row.id) ?? 0
+              const isTreeChild = depth > 0
+              const isTreeRoot = depth === 0 && childrenMap.has(row.id)
+              const classes = []
+              if (row.id === highlightId) classes.push('highlight-new-item')
+              // 자식 행: 배경 shade + 좌측 border accent
+              if (isTreeChild) classes.push('bg-slate-50/80 shadow-[inset_3px_0_0_0_var(--color-border)]')
+              // 부모 행(자식 있음): 좌측 action accent
+              if (isTreeRoot) classes.push('shadow-[inset_3px_0_0_0_var(--color-action)]')
+              return classes.join(' ')
+            }}
+            sort={sortState}
+            onSortChange={setSortState}
+            virtualScroll
+            className="flex-1 min-h-0"
+          />
+        </div>
+      )}
+
+
+      {/* 일괄 처리 플로팅 바 */}
+      {(selectedIds.size > 0) && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-white border border-border rounded-lg shadow-lg px-6 py-3 flex items-center gap-4 animate-[slideUp_150ms_var(--ease-out)]">
+          <span className="text-sm font-medium text-text-primary">{selectedIds.size}건 선택됨 <span className="text-text-muted font-normal">(확인 가능 {selectedTunedCount}건)</span></span>
+          <Button size="sm" variant="secondary" onClick={handleBulkRetune}>
+            <RefreshCw size={13} className="mr-1" /> 튜닝 재요청
+          </Button>
+          <Button size="sm" onClick={handleBulkVerify}>
+            <CheckCircle2 size={13} className="mr-1" /> 일괄 확인
+          </Button>
+          <Button size="sm" variant="danger" onClick={handleBulkDelete}>
+            <Trash2 size={13} className="mr-1" /> 일괄 삭제
+          </Button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+          >
+            선택 해제
+          </button>
+        </div>
+      )}
+
+      </>}{/* end of LIST 뷰 */}
+
+      {/* ─── 모달 ─── */}
+      {confirmAction && (
+        <ConfirmDialog
+          open
+          title={confirmAction.title}
+          message={confirmAction.message}
+          variant={confirmAction.variant}
+          confirmLabel="확인"
+          cancelLabel="취소"
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => setConfirmAction(null)}
+        >
+          {confirmAction.item && (() => {
+            const it = confirmAction.item!
+            const eRate = calcElapsedRate(it)
+            const bRate = calcBuffersRate(it)
+            const execLabel = it.executionResult === 'completed' ? '실측' : it.executionResult === 'timeout' ? 'T/O' : '예상'
+            const intLabel = it.integrityResult === 'match' ? '일치' : it.integrityResult === 'mismatch' ? '불일치' : '미확인'
+            return (
+              <div className="mt-3 space-y-2.5">
+                <div className="rounded-lg border border-border bg-surface-alt px-3 py-2">
+                  <p className="text-[11px] text-text-muted mb-1">SQL ID</p>
+                  <p className="font-mono text-xs font-semibold text-text-primary">{it.sqlId}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-surface-alt px-3 py-2">
+                  <p className="text-[11px] text-text-muted mb-1">SQL Text</p>
+                  <p className="font-mono text-[11px] text-text-primary leading-relaxed line-clamp-3">{it.sqlText}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-border bg-white px-3 py-2">
+                    <p className="text-[11px] text-text-muted">Elapsed</p>
+                    <p className="text-xs font-mono text-text-primary mt-0.5">
+                      {fmtElapsed(it.originalElapsed)} → {fmtElapsed(it.tunedElapsed)}
+                      {eRate != null && eRate !== 0 && (
+                        <span className={`ml-1 font-medium ${eRate > 0 ? 'text-success' : 'text-danger'}`}>
+                          {eRate > 0 ? '▼' : '▲'}{Math.abs(eRate)}%
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-white px-3 py-2">
+                    <p className="text-[11px] text-text-muted">Buffers</p>
+                    <p className="text-xs font-mono text-text-primary mt-0.5">
+                      {fmtBuffers(it.originalBuffers)} → {fmtBuffers(it.tunedBuffers)}
+                      {bRate != null && bRate !== 0 && (
+                        <span className={`ml-1 font-medium ${bRate > 0 ? 'text-success' : 'text-danger'}`}>
+                          {bRate > 0 ? '▼' : '▲'}{Math.abs(bRate)}%
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <div className="flex-1 rounded-lg border border-border bg-white px-3 py-2">
+                    <p className="text-[11px] text-text-muted">검증방식</p>
+                    <p className="text-xs font-medium text-text-primary mt-0.5">{execLabel}</p>
+                  </div>
+                  <div className="flex-1 rounded-lg border border-border bg-white px-3 py-2">
+                    <p className="text-[11px] text-text-muted">결과일치</p>
+                    <p className={`text-xs font-medium mt-0.5 ${it.integrityResult === 'match' ? 'text-success' : it.integrityResult === 'mismatch' ? 'text-danger' : 'text-warning'}`}>{intLabel}</p>
+                  </div>
+                  <div className="flex-1 rounded-lg border border-border bg-white px-3 py-2">
+                    <p className="text-[11px] text-text-muted">인스턴스</p>
+                    <p className="text-xs text-text-primary mt-0.5">{it.instanceName}</p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-text-muted">확인 시 반영대기 상태로 전환됩니다.</p>
+              </div>
+            )
+          })()}
+        </ConfirmDialog>
+      )}
+
+      {/* 슬라이드 패널 — peek 전용 (좁은 모드만, maximize → workspace 전환) */}
+      <SlidePanel
+        open={!!panelItem && pageView === 'list'}
+        onClose={() => setPanelItem(null)}
+        title={panelItem?.sqlId || ''}
+        defaultWidthRatio={0.4}
+        noBackdrop
+        controlledMode={'slide' as PanelMode}
+        onModeChange={(mode) => {
+          if (mode === 'maximized' && panelItem) {
+            enterWorkspace(panelItem)
+            return
+          }
+          setPanelMode(mode)
+        }}
+        onWidthChange={(_w, m) => {
+          // maximize로 전환되면 workspace로 이동
+          if (m === 'maximized' && panelItem) {
+            enterWorkspace(panelItem)
+            return
+          }
+          if (m !== panelMode) setPanelMode(m)
+        }}
+        onOpenNewTab={panelItem ? () => window.open(`/work/${panelItem.id}?popup=true`, '_blank') : undefined}
+        contentClassName={panelItem && getStatus(panelItem) === 'approval_pending' ? 'flex-1 overflow-y-auto px-6 pt-6' : undefined}
+        headerContent={panelItem ? (
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="font-mono text-sm font-semibold text-text-primary shrink-0">{panelItem.sqlId}</span>
+            <div className="w-px h-4 bg-surface-muted shrink-0" />
+            <StatusIndicator status={panelItem.status} />
+          </div>
+        ) : undefined}
+      >
+        {panelItem && (
+          <ErrorBoundary fallback={
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-text-muted p-6">
+              <span className="text-sm">상세 패널 렌더 오류. 닫고 다시 시도해 주세요.</span>
+              <button
+                className="px-3 py-1.5 rounded text-sm bg-surface-raised border border-border hover:bg-action/10 text-text-primary"
+                onClick={() => setPanelItem(null)}
+              >닫기</button>
+            </div>
+          }>
+          <WorkDetailPanel
+            key={panelItem.id}
+            item={panelItem}
+            panelMode={panelMode}
+            onOpenWorkbench={() => enterWorkspace(panelItem)}
+            onVerify={() => {
+              setStatusOverrides(prev => ({ ...prev, [panelItem.id]: 'apply_pending' }))
+            }}
+            onReject={(onConfirmed) => {
+              setRejectTarget(panelItem)
+              rejectConfirmedRef.current = onConfirmed || null
+            }}
+            onRetune={() => {
+              setStatusOverrides(prev => ({ ...prev, [panelItem.id]: 'pending' }))
+              showToast(`${panelItem.sqlId} — 재튜닝 요청. 대기 큐에 등록되었습니다.`)
+            }}
+            onCancel={() => {
+              setConfirmAction({
+                title: '튜닝 중단', variant: 'danger',
+                message: `${panelItem.sqlId}\n진행 중인 튜닝을 중단하시겠습니까?`,
+                onConfirm: () => {
+                  setStatusOverrides(prev => ({ ...prev, [panelItem.id]: 'cancelled' }))
+                  setPanelItem(null)
+                  setConfirmAction(null)
+                  showToast(`${panelItem.sqlId} — 튜닝이 중단되었습니다.`)
+                },
+              })
+            }}
+          />
+          </ErrorBoundary>
+        )}
+      </SlidePanel>
+
+      {/* 반려 사유 모달 */}
+      {rejectTarget && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setRejectTarget(null)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg shadow-lg border border-border w-[420px] overflow-hidden" onClick={e => e.stopPropagation()}>
+              <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-text-primary">반려</h3>
+                <button onClick={() => setRejectTarget(null)} className="text-text-muted hover:text-text-secondary"><X size={16} /></button>
+              </div>
+              <div className="px-5 py-4">
+                <div className="text-xs text-text-secondary mb-2">{rejectTarget.sqlId}</div>
+                <label className="block text-xs font-medium text-text-primary mb-1">반려 사유</label>
+                <textarea
+                  className="w-full border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-danger/30 resize-none"
+                  rows={3}
+                  placeholder="반려 사유를 입력하세요..."
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                />
+              </div>
+              <div className="px-5 py-3 border-t border-border flex justify-end gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setRejectTarget(null)}>취소</Button>
+                <Button size="sm" variant="danger" onClick={confirmReject} disabled={!rejectReason.trim()}>반려</Button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* SQL 전체보기 — ComparePanel 재활용 */}
+      {sqlPreview && (
+        <ComparePanel
+          onClose={() => setSqlPreview(null)}
+          mode={{ type: 'single', target: 'sql-before' } as ComparePanelMode}
+          data={{ sqlBefore: sqlPreview.sqlText || '', sqlAfter: '', planBefore: '', planAfter: '' } as ComparePanelData}
+        />
+      )}
+
+      {/* 직접 튜닝요청 슬라이드 패널 */}
+      <SlidePanel
+        open={directInputOpen}
+        onClose={() => setDirectInputOpen(false)}
+        title="직접 튜닝요청"
+        defaultWidthRatio={0.5}
+      >
+        <div className="p-6">
+          <DirectInputForm
+            onCreated={(id) => {
+              setDirectInputOpen(false)
+              setHighlightId(id)
+              setToast('직접 튜닝요청이 작업함에 추가되었습니다')
+              setTimeout(() => setToast(null), 4500)
+            }}
+            onNavigateToExisting={(id) => {
+              setDirectInputOpen(false)
+              const found = backendItems.find(w => w.id === id)
+              if (found) setPanelItem(found)
+            }}
+          />
+        </div>
+      </SlidePanel>
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg bg-white border border-border px-5 py-3.5 text-sm text-text-primary shadow-xl"
+          style={{ animation: 'toastDrop 200ms var(--ease-out)' }}>
+          <CheckCircle2 className="h-5 w-5 text-success shrink-0" />
+          <span className="font-medium">{toast}</span>
+        </div>
+      )}
+    </div>
+  )
+}

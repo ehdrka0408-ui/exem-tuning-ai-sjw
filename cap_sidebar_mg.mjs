@@ -1,0 +1,10 @@
+import { firefox } from 'playwright';
+const b = await firefox.launch({headless:true});
+const ctx = await b.newContext({viewport:{width:1440,height:900}});
+const p = await ctx.newPage();
+await p.goto('http://10.10.45.185:3003/?cb='+Date.now(),{waitUntil:'networkidle'});
+await p.evaluate(() => { localStorage.setItem('mg:connected','false'); });
+await p.reload({waitUntil:'networkidle'});
+await p.waitForTimeout(800);
+await p.screenshot({path:'/tmp/sidebar_off.png', clip:{x:0,y:0,width:240,height:900}});
+await b.close();

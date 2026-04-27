@@ -1,0 +1,274 @@
+"""
+Seed representative tuning-case examples into exem_tuning_ai DB.
+
+Idempotent: skips rows whose (title, schema_name) already exist.
+Inserts into tuning_cases (+ related plans/bind_variables).
+"""
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from sqlalchemy import select
+from app.db.session import SessionLocal
+from app.models.tuning_case import TuningCase
+from app.models.plan import Plan, BindVariable
+
+
+SEED = [
+    # ───── 튜닝대기 (pending) ─────
+    {
+        "title": "[SEED] ORDER BY + 페이징 Top-N 최적화",
+        "category": "pagination",
+        "sql_id": "seed_pg_001",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "pending",
+        "owner": "ai",
+        "source": "awr",
+        "sql_text": (
+            "SELECT * FROM (\n"
+            "  SELECT o.*, ROWNUM rn\n"
+            "  FROM   ORDERS o\n"
+            "  WHERE  o.order_date >= :start_dt\n"
+            "  ORDER BY o.order_date DESC\n"
+            ") WHERE rn BETWEEN :p_from AND :p_to"
+        ),
+        "tuned_sql_text": None,
+        "rationale": "정렬 후 ROWNUM 필터는 전체 정렬을 유발. 인라인뷰에서 ORDER BY + ROWNUM<=p_to로 감싸 Top-N 정렬 경로 유도.",
+        "plans": [
+            ("before", "2111111111", 48, 720000, None),
+        ],
+        "binds": [
+            (":start_dt", "DATE", "2026-03-01", 1),
+            (":p_from",   "NUMBER", "1", 2),
+            (":p_to",     "NUMBER", "20", 3),
+        ],
+    },
+    {
+        "title": "[SEED] NOT IN → NOT EXISTS 변환",
+        "category": "subquery_unnest",
+        "sql_id": "seed_pg_002",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "pending",
+        "owner": "ai",
+        "source": "maxgauge",
+        "sql_text": (
+            "SELECT c.customer_id, c.customer_name\n"
+            "FROM   CUSTOMERS c\n"
+            "WHERE  c.customer_id NOT IN (\n"
+            "        SELECT o.customer_id FROM ORDERS o WHERE o.order_date > :cutoff\n"
+            "       )"
+        ),
+        "tuned_sql_text": None,
+        "rationale": "NOT IN은 NULL 존재 시 전체 결과 NULL 위험 + 인덱스 활용 저하. NOT EXISTS로 변환 권장.",
+        "plans": [
+            ("before", "2111111222", 12, 180000, None),
+        ],
+        "binds": [(":cutoff", "DATE", "2025-01-01", 1)],
+    },
+
+    # ───── 튜닝중 (tuning) ─────
+    {
+        "title": "[SEED] 인덱스 컬럼 함수 변형 제거",
+        "category": "sargable",
+        "sql_id": "seed_pg_003",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "tuning",
+        "owner": "ai",
+        "source": "vsql",
+        "sql_text": (
+            "SELECT * FROM EMPLOYEES\n"
+            "WHERE TO_CHAR(hire_date, 'YYYY-MM') = :ym"
+        ),
+        "tuned_sql_text": None,
+        "rationale": "인덱스 컬럼 TO_CHAR 변형으로 인덱스 미사용. 범위 조건으로 재작성 중.",
+        "plans": [
+            ("before", "2112222333", 6.5, 98000, "진단: idx_emp_hire 무시"),
+        ],
+        "binds": [(":ym", "VARCHAR2", "2026-03", 1)],
+    },
+    {
+        "title": "[SEED] 분석함수 중복 제거 (ROW_NUMBER)",
+        "category": "window_rewrite",
+        "sql_id": "seed_pg_004",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "tuning",
+        "owner": "ai",
+        "source": "awr",
+        "sql_text": (
+            "SELECT * FROM (\n"
+            "  SELECT t.*, ROW_NUMBER() OVER (PARTITION BY cust_id ORDER BY ts DESC) rn\n"
+            "  FROM   TRANSACTIONS t\n"
+            ") WHERE rn = 1"
+        ),
+        "tuned_sql_text": None,
+        "rationale": "대용량 분석함수로 PGA 부담. FIRST_VALUE 또는 KEEP(DENSE_RANK FIRST) 경로 실험 중.",
+        "plans": [("before", "2112233444", 22, 410000, None)],
+        "binds": [],
+    },
+
+    # ───── 튜닝완료 (approval_pending) ─────
+    {
+        "title": "[SEED] 카티시안 조인 제거 + Hash Join 유도",
+        "category": "join_rewrite",
+        "sql_id": "seed_pg_005",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "approval_pending",
+        "owner": "ai",
+        "source": "awr",
+        "sql_text": (
+            "SELECT a.order_id, b.product_name, c.customer_name\n"
+            "FROM   ORDERS a, PRODUCTS b, CUSTOMERS c\n"
+            "WHERE  a.product_id = b.product_id\n"
+            "AND    a.order_date > :dt"
+        ),
+        "tuned_sql_text": (
+            "SELECT /*+ USE_HASH(a b c) */ a.order_id, b.product_name, c.customer_name\n"
+            "FROM   ORDERS a\n"
+            "JOIN   PRODUCTS b ON a.product_id = b.product_id\n"
+            "JOIN   CUSTOMERS c ON a.customer_id = c.customer_id\n"
+            "WHERE  a.order_date > :dt"
+        ),
+        "rationale": "CUSTOMERS 조인 조건 누락으로 카티시안 폭증. 조인 조건 복구 + USE_HASH 힌트로 420s → 1.2s.",
+        "plans": [
+            ("before", "2113344555", 420, 9800000, None),
+            ("after",  "2113355666", 1.2,   6200,    None),
+        ],
+        "binds": [(":dt", "DATE", "2026-03-01", 1)],
+    },
+    {
+        "title": "[SEED] 인덱스 추가 권장 — orders(customer_id, order_date)",
+        "category": "index_recommend",
+        "sql_id": "seed_pg_006",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "approval_pending",
+        "owner": "ai",
+        "source": "maxgauge",
+        "sql_text": (
+            "SELECT COUNT(*) FROM ORDERS\n"
+            "WHERE customer_id = :cid AND order_date BETWEEN :s AND :e"
+        ),
+        "tuned_sql_text": (
+            "-- DDL: CREATE INDEX idx_ord_cust_date ON ORDERS(customer_id, order_date);\n"
+            "SELECT COUNT(*) FROM ORDERS\n"
+            "WHERE customer_id = :cid AND order_date BETWEEN :s AND :e"
+        ),
+        "rationale": "복합 인덱스 부재로 FULL SCAN. (customer_id, order_date) 인덱스 추가로 Range Scan 전환, 8.4s → 22ms.",
+        "plans": [
+            ("before", "2114455777", 8.4, 142000, None),
+            ("after",  "2114466888",   0.022,    320, None),
+        ],
+        "binds": [
+            (":cid", "NUMBER", "12345", 1),
+            (":s",   "DATE",   "2026-03-01", 2),
+            (":e",   "DATE",   "2026-03-31", 3),
+        ],
+    },
+
+    # ───── 반영대기 (apply_pending) ─────
+    {
+        "title": "[SEED] COUNT(*) → EXISTS 변환 (존재여부 체크)",
+        "category": "exists_rewrite",
+        "sql_id": "seed_pg_007",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "apply_pending",
+        "owner": "human",
+        "source": "vsql",
+        "sql_text": (
+            "SELECT CASE WHEN (SELECT COUNT(*) FROM ORDER_ITEMS WHERE order_id = :oid) > 0\n"
+            "            THEN 'Y' ELSE 'N' END FROM DUAL"
+        ),
+        "tuned_sql_text": (
+            "SELECT CASE WHEN EXISTS (SELECT 1 FROM ORDER_ITEMS WHERE order_id = :oid)\n"
+            "            THEN 'Y' ELSE 'N' END FROM DUAL"
+        ),
+        "rationale": "COUNT(*)는 전체 스캔. EXISTS로 첫 행 확인 즉시 종료, 95ms → 1ms.",
+        "plans": [
+            ("before", "2115566999", 0.095, 3100, None),
+            ("after",  "2115577000",  0.001,    4, None),
+        ],
+        "binds": [(":oid", "NUMBER", "98765", 1)],
+    },
+
+    # ───── 적용완료 (applied) ─────
+    {
+        "title": "[SEED] 파티션 프루닝 유도 — 범위조건 리팩터",
+        "category": "partition_pruning",
+        "sql_id": "seed_pg_008",
+        "schema_name": "EXEM",
+        "instance_name": "EDU-DB",
+        "status": "applied",
+        "owner": "done",
+        "source": "awr",
+        "sql_text": (
+            "SELECT SUM(amount) FROM SALES\n"
+            "WHERE SUBSTR(TO_CHAR(sale_date,'YYYYMMDD'),1,6) = :ym"
+        ),
+        "tuned_sql_text": (
+            "SELECT SUM(amount) FROM SALES\n"
+            "WHERE sale_date >= TO_DATE(:ym||'01','YYYYMMDD')\n"
+            "AND   sale_date <  ADD_MONTHS(TO_DATE(:ym||'01','YYYYMMDD'),1)"
+        ),
+        "rationale": "문자 변환으로 파티션 프루닝 실패. 범위 조건 전환으로 1개 파티션만 접근, 68s → 0.9s.",
+        "plans": [
+            ("before", "2116677111", 68, 1200000, None),
+            ("after",  "2116688222",   0.9,    8800, None),
+        ],
+        "binds": [(":ym", "VARCHAR2", "202603", 1)],
+    },
+]
+
+
+def upsert():
+    db = SessionLocal()
+    inserted = skipped = 0
+    try:
+        for row in SEED:
+            exists = db.execute(
+                select(TuningCase).where(
+                    TuningCase.title == row["title"],
+                    TuningCase.schema_name == row["schema_name"],
+                )
+            ).scalar_one_or_none()
+            if exists:
+                skipped += 1
+                continue
+            tc = TuningCase(
+                title=row["title"],
+                category=row["category"],
+                sql_id=row["sql_id"],
+                schema_name=row["schema_name"],
+                instance_name=row["instance_name"],
+                sql_text=row["sql_text"],
+                tuned_sql_text=row["tuned_sql_text"],
+                rationale=row["rationale"],
+                status=row["status"],
+                owner=row["owner"],
+                source=row["source"],
+            )
+            db.add(tc)
+            db.flush()
+            for phase, plan_hash, elapsed_sec, buffers, note in row["plans"]:
+                db.add(Plan(
+                    case_id=tc.id, phase=phase, plan_hash=plan_hash,
+                    plan_text=f"Plan hash value: {plan_hash}\n(seeded minimal plan for {phase})",
+                    elapsed_sec=elapsed_sec, buffers=buffers, note=note,
+                ))
+            for name, dtype, value, pos in row["binds"]:
+                db.add(BindVariable(
+                    case_id=tc.id, name=name, data_type=dtype, value=value, position=pos,
+                ))
+            inserted += 1
+        db.commit()
+    finally:
+        db.close()
+    print(f"seed done: inserted={inserted}, skipped={skipped}")
+
+
+if __name__ == "__main__":
+    upsert()
