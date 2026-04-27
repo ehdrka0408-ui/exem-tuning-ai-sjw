@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>EXEM Tuning AI — ER Diagram + 테이블 명세 (v14)</title>
+<style>
+body{font-family:'Pretendard','Malgun Gothic',sans-serif;background:#f4f6fa;margin:0;padding:30px;color:#1a1a1a}
+h1{text-align:center;color:#1e3a5f;font-size:22px;margin-bottom:2px}
+.sub{text-align:center;color:#888;font-size:12px;margin-bottom:28px}
+.er-wrap{display:flex;justify-content:center;margin-bottom:36px}
+.sec{font-size:17px;font-weight:700;color:#1e3a5f;border-left:4px solid #2a6cb6;padding-left:10px;margin:32px 0 14px}
+.card{background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.07);margin-bottom:26px;overflow:hidden}
+.card-h{padding:11px 16px;font-weight:700;font-size:14px;color:#fff;display:flex;align-items:center;gap:8px}
+.card-d{padding:8px 16px;font-size:12px;color:#555;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+.card table{width:100%;border-collapse:collapse;font-size:11.5px}
+.card th{background:#f1f5f9;color:#334155;padding:6px 10px;text-align:left;font-weight:600;border-bottom:1px solid #e2e8f0}
+.card td{padding:5px 10px;border-bottom:1px solid #f1f5f9}
+.card tr:last-child td{border-bottom:none}
+.pk{color:#d97706;font-weight:700}.fk{color:#2563eb}.tp{color:#64748b;font-size:10.5px}
+.null{color:#94a3b8;font-style:italic}
+.sample{background:#0f172a;color:#e2e8f0;padding:14px 16px;font-size:11px;font-family:'JetBrains Mono','D2Coding',monospace;line-height:1.55;overflow-x:auto;border-radius:0 0 10px 10px;white-space:pre}
+.sample .lbl{color:#93c5fd;font-weight:600}
+.sample .val{color:#fbbf24}
+.sample .note{color:#f87171}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:1200px;margin:0 auto}
+.gf{grid-column:1/-1}
+.diff-box{max-width:1200px;margin:0 auto 28px;background:#ecfeff;border-left:4px solid #0891b2;padding:14px 18px;border-radius:8px;font-size:12px;line-height:1.7;color:#155e75}
+.diff-box b{color:#0e7490}
+.stat-box{max-width:1200px;margin:0 auto 28px;display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.stat{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.stat .k{font-size:11px;color:#64748b}
+.stat .v{font-size:18px;font-weight:700;color:#1e3a5f;margin-top:3px}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-left:6px}
+.b-ok{background:#dcfce7;color:#166534}
+.b-warn{background:#fef3c7;color:#92400e}
+.b-err{background:#fee2e2;color:#991b1b}
+.b-new{background:#dbeafe;color:#1e40af}
+.legend{max-width:1150px;margin:0 auto 18px;font-size:11.5px;color:#64748b;text-align:right}
+.legend .pk-l{color:#d97706;font-weight:700}
+.note-box{padding:10px 16px;font-size:11.5px;line-height:1.6;background:#fffbeb;border-top:1px solid #fcd34d;border-bottom:1px solid #fcd34d;color:#78350f}
+.note-box b{color:#92400e}
+.note-box .nh{display:inline-block;background:#f59e0b;color:#fff;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;margin-right:6px;vertical-align:middle}
+@media(max-width:1200px){.stat-box{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:900px){.g2{grid-template-columns:1fr}.stat-box{grid-template-columns:repeat(2,1fr)}}
+@media print{body{background:#fff;padding:10px}}
+</style>
+</head>
+<body>
+
+<h1>EXEM SQL Tuning AI — ER Diagram</h1>
+<p class="sub">튜닝현황 테이블 구조 <b>v14</b> (2026-04-24 마이그레이션 완료 반영 · legacy_console_id 추가) &nbsp;|&nbsp; 공통 JOIN 키: <b>instance_id</b> + <b>request_id</b> + <b>sql_id</b> &nbsp;|&nbsp; DB: exem_tuning_ai @ 10.10.45.119:5432</p>
+
+<!-- ─── 실시간 통계 카운터 ─── -->
+<div class="stat-box">
+  <div class="stat"><div class="k">instances</div><div class="v">1</div></div>
+  <div class="stat"><div class="k">users</div><div class="v">6</div></div>
+  <div class="stat"><div class="k">groups</div><div class="v">2</div></div>
+  <div class="stat"><div class="k">llm_models</div><div class="v">1</div></div>
+  <div class="stat"><div class="k">policy_settings</div><div class="v">9</div></div>
+  <div class="stat"><div class="k">tuning_request_group</div><div class="v">24</div></div>
+  <div class="stat"><div class="k">tuning_requests</div><div class="v">26</div></div>
+  <div class="stat"><div class="k">sql_texts</div><div class="v">82</div></div>
+  <div class="stat"><div class="k">sql_performance</div><div class="v">64</div></div>
+  <div class="stat"><div class="k">sql_plans</div><div class="v">35</div></div>
+  <div class="stat"><div class="k">sql_bind_variables</div><div class="v">20</div></div>
+  <div class="stat"><div class="k">llm_call_log</div><div class="v">40</div></div>
+</div>
+
+<div class="diff-box">
+<b>v13 → v14 갱신 포인트 (2026-04-24 마이그레이션 완료)</b><br>
+① <b>마이그레이션 완료</b>: PK 컬럼명 통일 (<code>user_id</code> / <code>llm_id</code> / <code>instance_id</code>) · <code>llm_id</code> / <code>user_id</code> 의 <code>tuning_request_group</code> 이동이 실 DB에 적용됨. v13 목표 설계가 현실화됨. 관련 경고 박스 제거.<br>
+② <b>users.legacy_console_id</b> (VARCHAR, NULL) 컬럼 추가 — console_users → users 연결용 임시 매핑 컬럼 (향후 제거 예정).<br>
+③ <b>tuning_requests.instance_id</b> 타입 <code>INTEGER</code> → <code>BIGINT</code> (instances.instance_id BIGINT 매칭).<br>
+④ <b>row count 갱신</b>: instances 0 → 1, users 1 → 6. 그 외 동일.<br>
+⑤ 시간 단위 <b>Sec(초) 통일</b> 유지. <code>latency_ms</code> 표시 단위 Sec, 환산 ÷1000.<br>
+⑥ <b>llm_call_log 컬럼 재정의</b> (2026-04-24): <code>log_id</code>(PK SERIAL) → <code>request_id</code> rename + PK 제약 제거 (1:N 허용). 기존 <code>request_id</code>(FK → tuning_requests) 컬럼 삭제. 총 15 → 14컬럼. 실 DB ALTER TABLE 적용 완료.<br>
+⑦ <b>ait_groups 테이블명 변경</b> (2026-04-24): <code>ait_groups</code> → <code>groups</code> rename. 컬럼 구조 동일. FK(users.group_id → groups.group_id) 자동 승계 확인. 실 DB ALTER TABLE 적용 완료.<br>
+⑧ <b>db_instances·console_users 마이그레이션 완료</b> (2026-04-26): <code>sql_texts.instance_id</code>·<code>tuning_requests.instance_id</code> FK 가 모두 <code>instances.instance_id</code> 로 재배선됨. 구 <code>db_instances</code>·<code>console_users</code> 는 각각 <code>_bak_db_instances_20260424</code>·<code>_bak_console_users_20260424</code> 로 백업 후 제거. 컬럼 구조 변경은 없음 (FK 참조 대상만 전환).
+</div>
+
+<div class="legend">
+범례 — 실선 화살표: FK 강제 / 점선: 논리적 참조 또는 instance_id 공통 / <span class="pk-l">PK</span> 표기는 굵기 700 + 오렌지(#d97706)
+</div>
+
+<!-- ═══════ ER Diagram ═══════ -->
+<div class="er-wrap">
+<svg viewBox="0 0 1180 1640" width="1180" height="1640" xmlns="http://www.w3.org/2000/svg" style="font-family:Pretendard,sans-serif;background:#f8fafc;border-radius:12px;border:1px solid #cbd5e1">
+
+<!-- ═══════ Row A · 설정 영역 상단 (y=18~248) ═══════ -->
+
+<!-- groups (8 컬럼) -->
+<rect x="20" y="18" width="275" height="218" rx="8" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+<rect x="20" y="18" width="275" height="26" rx="8" fill="#0891b2"/>
+<text x="157" y="36" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">groups</text>
+<text x="32" y="62" font-size="10.5" fill="#d97706" font-weight="700">PK group_id (BIGINT)</text>
+<text x="32" y="78" font-size="10.5" fill="#334155">group_name (VARCHAR)</text>
+<text x="32" y="94" font-size="10.5" fill="#334155">grant_request (BOOLEAN)</text>
+<text x="32" y="110" font-size="10.5" fill="#334155">grant_user_group_manage (BOOLEAN)</text>
+<text x="32" y="126" font-size="10.5" fill="#334155">grant_auto (BOOLEAN)</text>
+<text x="32" y="142" font-size="10.5" fill="#334155">grant_approval (BOOLEAN)</text>
+<text x="32" y="158" font-size="10.5" fill="#334155">created_at (TIMESTAMPTZ)</text>
+<text x="32" y="174" font-size="10.5" fill="#334155">updated_at (TIMESTAMPTZ)</text>
+
+<!-- users (13 컬럼, 높이 248로 확장) -->
+<rect x="315" y="18" width="275" height="248" rx="8" fill="#f0f9ff" stroke="#0284c7" stroke-width="2"/>
+<rect x="315" y="18" width="275" height="26" rx="8" fill="#0284c7"/>
+<text x="452" y="36" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">users</text>
+<text x="327" y="62" font-size="10.5" fill="#d97706" font-weight="700">PK user_id (BIGINT)</text>
+<text x="327" y="78" font-size="10.5" fill="#334155">email (VARCHAR)</text>
+<text x="327" y="94" font-size="10.5" fill="#334155">name (VARCHAR)</text>
+<text x="327" y="110" font-size="10.5" fill="#334155">role (ENUM)</text>
+<text x="327" y="126" font-size="10.5" fill="#334155">group_id (BIGINT)</text>
+<text x="327" y="142" font-size="10.5" fill="#334155">password_hash (VARCHAR)</text>
+<text x="327" y="158" font-size="10.5" fill="#334155">last_login_at (TIMESTAMPTZ)</text>
+<text x="327" y="174" font-size="10.5" fill="#334155">ip_limits (TEXT)</text>
+<text x="327" y="190" font-size="10.5" fill="#334155">is_active (BOOLEAN)</text>
+<text x="327" y="206" font-size="10.5" fill="#334155">phone (VARCHAR)</text>
+<text x="327" y="222" font-size="10.5" fill="#334155">created_at (TIMESTAMPTZ)</text>
+<text x="327" y="238" font-size="10.5" fill="#334155">updated_at (TIMESTAMPTZ)</text>
+<text x="327" y="254" font-size="10.5" fill="#334155">legacy_console_id (VARCHAR)</text>
+
+<!-- llm_models (4 컬럼) -->
+<rect x="610" y="18" width="275" height="218" rx="8" fill="#fdf4ff" stroke="#a21caf" stroke-width="2"/>
+<rect x="610" y="18" width="275" height="26" rx="8" fill="#a21caf"/>
+<text x="747" y="36" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">llm_models</text>
+<text x="622" y="62" font-size="10.5" fill="#d97706" font-weight="700">PK llm_id (INTEGER)</text>
+<text x="622" y="78" font-size="10.5" fill="#334155">provider (VARCHAR)</text>
+<text x="622" y="94" font-size="10.5" fill="#334155">model_name (VARCHAR)</text>
+<text x="622" y="110" font-size="10.5" fill="#334155">description (TEXT)</text>
+
+<!-- policy_settings (5 컬럼) -->
+<rect x="905" y="18" width="255" height="218" rx="8" fill="#fefce8" stroke="#a16207" stroke-width="2"/>
+<rect x="905" y="18" width="255" height="26" rx="8" fill="#a16207"/>
+<text x="1032" y="36" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">policy_settings</text>
+<text x="917" y="62" font-size="10.5" fill="#d97706" font-weight="700">PK key (VARCHAR)</text>
+<text x="917" y="78" font-size="10.5" fill="#334155">value (JSONB)</text>
+<text x="917" y="94" font-size="10.5" fill="#334155">description (TEXT)</text>
+<text x="917" y="110" font-size="10.5" fill="#334155">updated_by (VARCHAR)</text>
+<text x="917" y="126" font-size="10.5" fill="#334155">updated_at (TIMESTAMPTZ)</text>
+
+<!-- ═══════ Row B · instances (y=290~570, 32 컬럼 3열) ═══════ -->
+<rect x="20" y="290" width="1140" height="280" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+<rect x="20" y="290" width="1140" height="26" rx="8" fill="#d97706"/>
+<text x="590" y="308" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">instances</text>
+<!-- 좌 11컬럼 -->
+<text x="32" y="334" font-size="10.5" fill="#d97706" font-weight="700">PK instance_id (BIGINT)</text>
+<text x="32" y="350" font-size="10.5" fill="#334155">name (VARCHAR)</text>
+<text x="32" y="366" font-size="10.5" fill="#334155">alias_name (VARCHAR)</text>
+<text x="32" y="382" font-size="10.5" fill="#334155">db_groupname (VARCHAR)</text>
+<text x="32" y="398" font-size="10.5" fill="#334155">host (VARCHAR)</text>
+<text x="32" y="414" font-size="10.5" fill="#334155">port (INTEGER)</text>
+<text x="32" y="430" font-size="10.5" fill="#334155">sid (VARCHAR)</text>
+<text x="32" y="446" font-size="10.5" fill="#334155">service_name (VARCHAR)</text>
+<text x="32" y="462" font-size="10.5" fill="#334155">db_type (VARCHAR)</text>
+<text x="32" y="478" font-size="10.5" fill="#334155">db_version (VARCHAR)</text>
+<text x="32" y="494" font-size="10.5" fill="#334155">os_type (VARCHAR)</text>
+<!-- 중 11컬럼 -->
+<text x="400" y="334" font-size="10.5" fill="#334155">username (VARCHAR)</text>
+<text x="400" y="350" font-size="10.5" fill="#334155">password_encrypted (TEXT)</text>
+<text x="400" y="366" font-size="10.5" fill="#334155">is_sysdba (BOOLEAN)</text>
+<text x="400" y="382" font-size="10.5" fill="#334155">is_active (BOOLEAN)</text>
+<text x="400" y="398" font-size="10.5" fill="#334155">pool_min (INTEGER)</text>
+<text x="400" y="414" font-size="10.5" fill="#334155">pool_max (INTEGER)</text>
+<text x="400" y="430" font-size="10.5" fill="#334155">pool_increment (INTEGER)</text>
+<text x="400" y="446" font-size="10.5" fill="#334155">pool_timeout_sec (INTEGER)</text>
+<text x="400" y="462" font-size="10.5" fill="#334155">pool_max_lifetime_sec (INTEGER)</text>
+<text x="400" y="478" font-size="10.5" fill="#334155">stmt_cache_size (INTEGER)</text>
+<text x="400" y="494" font-size="10.5" fill="#334155">connect_timeout_sec (INTEGER)</text>
+<!-- 우 10컬럼 -->
+<text x="780" y="334" font-size="10.5" fill="#334155">query_timeout_sec (INTEGER)</text>
+<text x="780" y="350" font-size="10.5" fill="#334155">cb_failure_threshold (INTEGER)</text>
+<text x="780" y="366" font-size="10.5" fill="#334155">cb_cooldown_sec (INTEGER)</text>
+<text x="780" y="382" font-size="10.5" fill="#334155">cb_success_threshold (INTEGER)</text>
+<text x="780" y="398" font-size="10.5" fill="#334155">health_status (VARCHAR)</text>
+<text x="780" y="414" font-size="10.5" fill="#334155">last_health_check_at (TIMESTAMPTZ)</text>
+<text x="780" y="430" font-size="10.5" fill="#334155">last_tested_at (TIMESTAMPTZ)</text>
+<text x="780" y="446" font-size="10.5" fill="#334155">last_error_message (TEXT)</text>
+<text x="780" y="462" font-size="10.5" fill="#334155">created_at (TIMESTAMPTZ)</text>
+<text x="780" y="478" font-size="10.5" fill="#334155">updated_at (TIMESTAMPTZ)</text>
+
+<!-- ═══════ Row C · 중앙 요청 영역 (y=600~1138) ═══════ -->
+
+<!-- tuning_request_group (11 컬럼, y=600~790) -->
+<rect x="20" y="600" width="370" height="190" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="2"/>
+<rect x="20" y="600" width="370" height="26" rx="8" fill="#4f46e5"/>
+<text x="205" y="618" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">tuning_request_group</text>
+<text x="32" y="644" font-size="10.5" fill="#d97706" font-weight="700">PK group_id (UUID)</text>
+<text x="32" y="660" font-size="10.5" fill="#334155">request_group_name (VARCHAR)</text>
+<text x="32" y="676" font-size="10.5" fill="#334155">alias (TEXT)</text>
+<text x="32" y="692" font-size="10.5" fill="#334155">instance_id (BIGINT)</text>
+<text x="32" y="708" font-size="10.5" fill="#334155">request_source (VARCHAR)</text>
+<text x="32" y="724" font-size="10.5" fill="#334155">created_by (VARCHAR)</text>
+<text x="32" y="740" font-size="10.5" fill="#334155">created_at (TIMESTAMPTZ)</text>
+<text x="32" y="756" font-size="10.5" fill="#334155">scheduled_at (TIMESTAMPTZ)</text>
+<text x="32" y="772" font-size="10.5" fill="#334155">request_count (INTEGER)</text>
+<text x="32" y="788" font-size="10.5" fill="#334155">llm_id (INTEGER)</text>
+<text x="220" y="788" font-size="10.5" fill="#334155">user_id (BIGINT)</text>
+
+<!-- tuning_requests (19 컬럼, y=810~1138) -->
+<rect x="20" y="810" width="370" height="328" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+<rect x="20" y="810" width="370" height="26" rx="8" fill="#2563eb"/>
+<text x="205" y="828" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">tuning_requests</text>
+<text x="32" y="854" font-size="10.5" fill="#d97706" font-weight="700">PK request_id (INTEGER)</text>
+<text x="32" y="870" font-size="10.5" fill="#334155">instance_id (BIGINT)</text>
+<text x="32" y="886" font-size="10.5" fill="#334155">parent_request_id (INTEGER)</text>
+<text x="32" y="902" font-size="10.5" fill="#334155">asis_sql_id (VARCHAR)</text>
+<text x="32" y="918" font-size="10.5" fill="#334155">tobe_sql_id (VARCHAR)</text>
+<text x="32" y="934" font-size="10.5" fill="#334155">source (VARCHAR)</text>
+<text x="32" y="950" font-size="10.5" fill="#334155">status (VARCHAR)</text>
+<text x="32" y="966" font-size="10.5" fill="#334155">rationale (TEXT)</text>
+<text x="32" y="982" font-size="10.5" fill="#334155">user_instruction (TEXT)</text>
+<text x="32" y="998" font-size="10.5" fill="#334155">alias (VARCHAR)</text>
+<text x="32" y="1014" font-size="10.5" fill="#334155">requested_at (TIMESTAMPTZ)</text>
+<text x="32" y="1030" font-size="10.5" fill="#334155">completed_at (TIMESTAMPTZ)</text>
+<text x="32" y="1046" font-size="10.5" fill="#334155">latency_ms (INTEGER)</text>
+<text x="32" y="1062" font-size="10.5" fill="#334155">schema_name (VARCHAR)</text>
+<text x="32" y="1078" font-size="10.5" fill="#334155">result_match (BOOLEAN)</text>
+<text x="32" y="1094" font-size="10.5" fill="#334155">group_id (UUID)</text>
+<text x="32" y="1110" font-size="10.5" fill="#334155">request_group_name (VARCHAR)</text>
+<text x="32" y="1126" font-size="10.5" fill="#334155">request_source (VARCHAR)</text>
+<text x="220" y="1126" font-size="10.5" fill="#334155">scheduled_at (TIMESTAMPTZ)</text>
+
+<!-- sql_texts (5 컬럼, y=600~732) -->
+<rect x="820" y="600" width="340" height="132" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+<rect x="820" y="600" width="340" height="26" rx="8" fill="#16a34a"/>
+<text x="990" y="618" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">sql_texts</text>
+<text x="832" y="644" font-size="10.5" fill="#334155">sql_id (VARCHAR)</text>
+<text x="832" y="660" font-size="10.5" fill="#334155">instance_id (INTEGER)</text>
+<text x="832" y="676" font-size="10.5" fill="#334155">sql_text (TEXT)</text>
+<text x="832" y="692" font-size="10.5" fill="#334155">sql_type (VARCHAR)</text>
+<text x="832" y="708" font-size="10.5" fill="#334155">created_at (TIMESTAMPTZ)</text>
+
+<!-- ═══════ Row D · 하단 수집 영역 (y=1170~1420) ═══════ -->
+
+<!-- sql_performance (13 컬럼) -->
+<rect x="440" y="1170" width="350" height="250" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="2"/>
+<rect x="440" y="1170" width="350" height="26" rx="8" fill="#db2777"/>
+<text x="615" y="1188" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">sql_performance</text>
+<text x="452" y="1214" font-size="10.5" fill="#334155">request_id (INTEGER)</text>
+<text x="452" y="1230" font-size="10.5" fill="#334155">instance_id (INTEGER)</text>
+<text x="452" y="1246" font-size="10.5" fill="#334155">sql_id (VARCHAR)</text>
+<text x="452" y="1262" font-size="10.5" fill="#334155">phase (VARCHAR)</text>
+<text x="452" y="1278" font-size="10.5" fill="#334155">elapsed_time_sec (NUMERIC)</text>
+<text x="452" y="1294" font-size="10.5" fill="#334155">cpu_time_sec (NUMERIC)</text>
+<text x="452" y="1310" font-size="10.5" fill="#334155">buffer_gets_count (BIGINT)</text>
+<text x="452" y="1326" font-size="10.5" fill="#334155">disk_reads_count (BIGINT)</text>
+<text x="452" y="1342" font-size="10.5" fill="#334155">executions_count (BIGINT)</text>
+<text x="452" y="1358" font-size="10.5" fill="#334155">rows_processed_count (BIGINT)</text>
+<text x="452" y="1374" font-size="10.5" fill="#334155">captured_at (TIMESTAMPTZ)</text>
+<text x="452" y="1390" font-size="10.5" fill="#334155">is_estimated (CHAR)</text>
+<text x="452" y="1406" font-size="10.5" fill="#334155">plan_hash (VARCHAR)</text>
+
+<!-- sql_plans (7 컬럼) -->
+<rect x="810" y="1170" width="340" height="250" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+<rect x="810" y="1170" width="340" height="26" rx="8" fill="#ca8a04"/>
+<text x="980" y="1188" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">sql_plans</text>
+<text x="822" y="1214" font-size="10.5" fill="#334155">instance_id (INTEGER)</text>
+<text x="822" y="1230" font-size="10.5" fill="#334155">sql_id (VARCHAR)</text>
+<text x="822" y="1246" font-size="10.5" fill="#334155">phase (VARCHAR)</text>
+<text x="822" y="1262" font-size="10.5" fill="#334155">plan_hash (VARCHAR)</text>
+<text x="822" y="1278" font-size="10.5" fill="#334155">plan_text (TEXT)</text>
+<text x="822" y="1294" font-size="10.5" fill="#334155">cost (INTEGER)</text>
+<text x="822" y="1310" font-size="10.5" fill="#334155">captured_at (TIMESTAMPTZ)</text>
+
+<!-- sql_bind_variables (8 컬럼) -->
+<rect x="40" y="1170" width="350" height="250" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2"/>
+<rect x="40" y="1170" width="350" height="26" rx="8" fill="#7c3aed"/>
+<text x="215" y="1188" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">sql_bind_variables</text>
+<text x="52" y="1214" font-size="10.5" fill="#334155">request_id (INTEGER)</text>
+<text x="52" y="1230" font-size="10.5" fill="#334155">sql_id (VARCHAR)</text>
+<text x="52" y="1246" font-size="10.5" fill="#334155">instance_id (INTEGER)</text>
+<text x="52" y="1262" font-size="10.5" fill="#334155">name (VARCHAR)</text>
+<text x="52" y="1278" font-size="10.5" fill="#334155">position (INTEGER)</text>
+<text x="52" y="1294" font-size="10.5" fill="#334155">data_type (VARCHAR)</text>
+<text x="52" y="1310" font-size="10.5" fill="#334155">value (TEXT)</text>
+<text x="52" y="1326" font-size="10.5" fill="#334155">captured_at (TIMESTAMPTZ)</text>
+
+<!-- ═══════ Row E · 최하단 감사 로그 (y=1460~1610) ═══════ -->
+<rect x="20" y="1460" width="1140" height="150" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="2"/>
+<rect x="20" y="1460" width="1140" height="26" rx="8" fill="#475569"/>
+<text x="590" y="1478" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">llm_call_log</text>
+<!-- 좌 5 -->
+<text x="32" y="1504" font-size="10.5" fill="#334155">request_id (INTEGER)</text>
+<text x="32" y="1520" font-size="10.5" fill="#334155">instance_id (INTEGER)</text>
+<text x="32" y="1536" font-size="10.5" fill="#334155">provider (VARCHAR)</text>
+<text x="32" y="1552" font-size="10.5" fill="#334155">model (VARCHAR)</text>
+<text x="32" y="1568" font-size="10.5" fill="#334155">sql_id (VARCHAR)</text>
+<!-- 중 5 -->
+<text x="410" y="1504" font-size="10.5" fill="#334155">work_id (VARCHAR)</text>
+<text x="410" y="1520" font-size="10.5" fill="#334155">input_tokens (INTEGER)</text>
+<text x="410" y="1536" font-size="10.5" fill="#334155">output_tokens (INTEGER)</text>
+<text x="410" y="1552" font-size="10.5" fill="#334155">latency_ms (INTEGER)</text>
+<text x="410" y="1568" font-size="10.5" fill="#334155">status (VARCHAR)</text>
+<!-- 우 4 -->
+<text x="790" y="1504" font-size="10.5" fill="#334155">error (TEXT)</text>
+<text x="790" y="1520" font-size="10.5" fill="#334155">created_at (TIMESTAMPTZ)</text>
+<text x="790" y="1536" font-size="10.5" fill="#334155">cached_tokens (BIGINT)</text>
+<text x="790" y="1552" font-size="10.5" fill="#334155">cache_creation_tokens (BIGINT)</text>
+
+<!-- ═══════ 관계선 ═══════ -->
+
+<!-- groups → users (group_id) 실선 FK -->
+<line x1="295" y1="100" x2="315" y2="126" stroke="#0891b2" stroke-width="1.8"/>
+<polygon points="315,126 306,121 308,130" fill="#0891b2"/>
+<text x="270" y="118" font-size="9.5" fill="#0891b2" font-weight="600">group_id</text>
+
+<!-- users → tuning_request_group (user_id, 실선 FK) -->
+<path d="M 380 266 C 320 400, 260 520, 220 600" stroke="#0284c7" stroke-width="1.8" fill="none"/>
+<polygon points="220,600 215,590 225,590" fill="#0284c7"/>
+<text x="230" y="460" font-size="9.5" fill="#0284c7" font-weight="600">user_id (FK)</text>
+
+<!-- llm_models → tuning_request_group (llm_id, 실선 FK) -->
+<path d="M 700 236 C 560 400, 400 520, 340 600" stroke="#a21caf" stroke-width="1.8" fill="none"/>
+<polygon points="340,600 335,590 345,590" fill="#a21caf"/>
+<text x="480" y="440" font-size="9.5" fill="#a21caf" font-weight="600">llm_id (FK)</text>
+
+<!-- instances → tuning_request_group (점선) -->
+<line x1="240" y1="570" x2="200" y2="600" stroke="#d97706" stroke-width="1.3" stroke-dasharray="5,3"/>
+<text x="150" y="592" font-size="9.5" fill="#d97706">instance_id</text>
+
+<!-- instances → tuning_requests (점선) -->
+<line x1="330" y1="570" x2="330" y2="810" stroke="#d97706" stroke-width="1.3" stroke-dasharray="5,3"/>
+<text x="335" y="690" font-size="9.5" fill="#d97706">instance_id</text>
+
+<!-- instances → sql_texts (점선) -->
+<line x1="900" y1="570" x2="900" y2="600" stroke="#d97706" stroke-width="1.3" stroke-dasharray="5,3"/>
+<text x="910" y="592" font-size="9.5" fill="#d97706">instance_id</text>
+
+<!-- tuning_request_group → tuning_requests (group_id, 실선 FK) -->
+<line x1="205" y1="790" x2="205" y2="810" stroke="#4f46e5" stroke-width="2"/>
+<polygon points="205,810 200,800 210,800" fill="#4f46e5"/>
+<text x="215" y="804" font-size="9.5" fill="#4f46e5" font-weight="600">group_id (FK)</text>
+
+<!-- tuning_requests → sql_texts (asis_sql_id, 실선) -->
+<path d="M 390 910 C 600 810, 750 700, 820 660" stroke="#2563eb" stroke-width="1.6" fill="none"/>
+<polygon points="820,660 810,658 813,667" fill="#2563eb"/>
+<text x="560" y="782" font-size="9.5" fill="#2563eb" font-weight="600">asis_sql_id</text>
+
+<!-- tuning_requests → sql_texts (tobe_sql_id, 실선) -->
+<path d="M 390 926 C 620 840, 770 740, 820 692" stroke="#2563eb" stroke-width="1.6" fill="none"/>
+<polygon points="820,692 810,690 813,699" fill="#2563eb"/>
+<text x="560" y="810" font-size="9.5" fill="#2563eb" font-weight="600">tobe_sql_id</text>
+
+<!-- tuning_requests → sql_performance (실선) -->
+<path d="M 300 1138 C 350 1150, 420 1160, 500 1170" stroke="#db2777" stroke-width="1.6" fill="none"/>
+<polygon points="500,1170 491,1166 494,1174" fill="#db2777"/>
+<text x="300" y="1158" font-size="9.5" fill="#db2777" font-weight="600">request_id + instance_id + sql_id</text>
+
+<!-- tuning_requests → sql_bind_variables (실선 FK) -->
+<path d="M 180 1138 C 180 1150, 195 1160, 210 1170" stroke="#7c3aed" stroke-width="1.8" fill="none"/>
+<polygon points="210,1170 201,1165 204,1174" fill="#7c3aed"/>
+<text x="30" y="1158" font-size="9.5" fill="#7c3aed" font-weight="600">request_id + instance_id + sql_id [FK: request_id]</text>
+
+<!-- sql_performance ↔ sql_plans (점선, instance_id + plan_hash) -->
+<line x1="790" y1="1295" x2="810" y2="1295" stroke="#ca8a04" stroke-width="1.5" stroke-dasharray="5,3"/>
+<text x="760" y="1288" font-size="9.5" fill="#ca8a04" font-weight="600">instance_id + plan_hash</text>
+
+<!-- tuning_requests → llm_call_log (점선) -->
+<path d="M 250 1138 C 250 1300, 280 1440, 350 1460" stroke="#475569" stroke-width="1" stroke-dasharray="4,3" fill="none"/>
+<text x="258" y="1450" font-size="9.5" fill="#475569">request_id</text>
+
+</svg>
+</div>
+
+<!-- ═══════ 테이블 상세 + 샘플 데이터 ═══════ -->
+<h2 class="sec">설정 영역 — 상세 명세 + 샘플 데이터 (2026-04-24 실 조회)</h2>
+<div class="g2">
+
+<!-- groups -->
+<div class="card">
+<div class="card-h" style="background:#0891b2">groups — 사용자 권한 그룹 <span class="badge b-new">신규</span><span class="badge b-ok">2 rows</span></div>
+<div class="card-d">사용자 그룹별 권한 플래그 (요청·관리·자동·승인). users.group_id 로 참조.</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="pk">group_id (PK)</td><td class="tp">BIGINT</td><td>그룹 ID</td></tr>
+<tr><td>group_name</td><td class="tp">VARCHAR</td><td>그룹명 (관리자/튜너 등)</td></tr>
+<tr><td>grant_request</td><td class="tp">BOOLEAN</td><td>튜닝 요청 권한</td></tr>
+<tr><td>grant_user_group_manage</td><td class="tp">BOOLEAN</td><td>사용자·그룹 관리 권한</td></tr>
+<tr><td>grant_auto</td><td class="tp">BOOLEAN</td><td>자동튜닝 실행 권한</td></tr>
+<tr><td>grant_approval</td><td class="tp">BOOLEAN</td><td>결재 승인 권한</td></tr>
+<tr><td>created_at</td><td class="tp">TIMESTAMPTZ</td><td>생성 시각</td></tr>
+<tr><td>updated_at</td><td class="tp">TIMESTAMPTZ</td><td>수정 시각</td></tr>
+</table>
+<div class="sample"><span class="lbl">SELECT * FROM groups ORDER BY group_id;</span>
+<span class="val">group_id</span>                = 1
+<span class="val">group_name</span>              = 관리자
+<span class="val">grant_request</span>           = true
+<span class="val">grant_user_group_manage</span> = true
+<span class="val">grant_auto</span>              = true
+<span class="val">grant_approval</span>          = true
+
+<span class="val">group_id</span>                = 2
+<span class="val">group_name</span>              = 튜너
+<span class="val">grant_request</span>           = true
+<span class="val">grant_user_group_manage</span> = false
+<span class="val">grant_auto</span>              = false
+<span class="val">grant_approval</span>          = false</div>
+</div>
+
+<!-- users -->
+<div class="card">
+<div class="card-h" style="background:#0284c7">users — 콘솔 사용자 <span class="badge b-new">v14 legacy_console_id 추가</span><span class="badge b-ok">6 rows</span></div>
+<div class="card-d">로그인/권한 주체. role 은 별도 테이블이 아닌 USER-DEFINED ENUM 타입. group_id 로 groups 참조.</div>
+<div class="note-box">
+<span class="nh">v14 마이그레이션 완료</span><b>console_users 대체 완료 (마이그레이션 적용). legacy_console_id 는 구 console_users.id 와의 매핑 컬럼 (향후 제거 예정)</b>
+</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="pk">user_id (PK)</td><td class="tp">BIGINT</td><td>사용자 ID</td></tr>
+<tr><td>email</td><td class="tp">VARCHAR</td><td>로그인 이메일</td></tr>
+<tr><td>name</td><td class="tp">VARCHAR</td><td>표시명</td></tr>
+<tr><td>role</td><td class="tp">ENUM user_role</td><td>USER-DEFINED ENUM (별도 테이블 아님)</td></tr>
+<tr><td class="fk">group_id</td><td class="tp">BIGINT</td><td>→ groups.group_id [FK]</td></tr>
+<tr><td>password_hash</td><td class="tp">VARCHAR</td><td>해시된 비밀번호</td></tr>
+<tr><td>last_login_at</td><td class="tp">TIMESTAMPTZ</td><td>최근 로그인</td></tr>
+<tr><td>ip_limits</td><td class="tp">TEXT</td><td>접속 IP 제한 목록</td></tr>
+<tr><td>is_active</td><td class="tp">BOOLEAN</td><td>활성 여부</td></tr>
+<tr><td>phone</td><td class="tp">VARCHAR</td><td>연락처</td></tr>
+<tr><td>created_at</td><td class="tp">TIMESTAMPTZ</td><td>생성 시각</td></tr>
+<tr><td>legacy_console_id</td><td class="tp">VARCHAR</td><td><b style="color:#1e40af">(v14 신규)</b> console_users 레거시 ID 연결용 (마이그레이션 매핑, 향후 제거 예정)</td></tr>
+<tr><td>updated_at</td><td class="tp">TIMESTAMPTZ</td><td>수정 시각</td></tr>
+</table>
+<div class="sample"><span class="lbl">SELECT user_id, email, name, role, group_id, is_active,
+       legacy_console_id, created_at
+FROM users ORDER BY user_id DESC LIMIT 1;</span>
+<span class="val">user_id</span>            = 6
+<span class="val">email</span>              = hana@exem.co.kr
+<span class="val">name</span>               = 정하나
+<span class="val">role</span>               = tuner
+<span class="val">group_id</span>           = <span class="note">NULL</span>
+<span class="val">password_hash</span>      = ***
+<span class="val">is_active</span>          = true
+<span class="val">legacy_console_id</span>  = U-005       <span class="note">◀ v14 신규</span>
+<span class="val">created_at</span>         = 2026-04-24 19:54:29+09</div>
+</div>
+
+<!-- llm_models -->
+<div class="card">
+<div class="card-h" style="background:#a21caf">llm_models — LLM 모델 카탈로그 <span class="badge b-new">신규</span><span class="badge b-ok">1 row</span></div>
+<div class="card-d">tuning_request_group.llm_id FK 대상. 요청 그룹 단위로 LLM 모델 고정.</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="pk">llm_id (PK)</td><td class="tp">INTEGER</td><td>모델 ID</td></tr>
+<tr><td>provider</td><td class="tp">VARCHAR</td><td>vllm / claude 등</td></tr>
+<tr><td>model_name</td><td class="tp">VARCHAR</td><td>axis-v1 등</td></tr>
+<tr><td>description</td><td class="tp">TEXT</td><td>모델 부가 설명</td></tr>
+</table>
+<div class="sample"><span class="lbl">SELECT * FROM llm_models;</span>
+<span class="val">llm_id</span>      = 1
+<span class="val">provider</span>    = vllm
+<span class="val">model_name</span>  = axis-v1
+<span class="val">description</span> = Local vLLM LoRA on Qwen2.5-Coder-32B (10.10.48.89:8606)</div>
+</div>
+
+<!-- policy_settings -->
+<div class="card">
+<div class="card-h" style="background:#a16207">policy_settings — 전역 정책·설정 <span class="badge b-new">신규</span><span class="badge b-ok">9 rows</span></div>
+<div class="card-d">KV 구조 정책 스토어. value JSONB로 타입 자유. 타임아웃·백프레셔·자동튜닝 on/off 등.</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="pk">key (PK)</td><td class="tp">VARCHAR</td><td>정책 키 (global.* / auto_tuning.* / ai.* / queue.*)</td></tr>
+<tr><td>value</td><td class="tp">JSONB</td><td>정책 값</td></tr>
+<tr><td>description</td><td class="tp">TEXT</td><td>정책 설명</td></tr>
+<tr><td>updated_by</td><td class="tp">VARCHAR</td><td>변경자</td></tr>
+<tr><td>updated_at</td><td class="tp">TIMESTAMPTZ</td><td>변경 시각</td></tr>
+</table>
+<div class="sample"><span class="lbl">SELECT key, description FROM policy_settings ORDER BY key;</span>
+<span class="val">ai.default_provider</span>            = AI 어댑터 초기값
+<span class="val">auto_tuning.enabled</span>            = 반복 자동튜닝 스케줄러 on/off
+<span class="val">auto_tuning.schedule_cron</span>      = 자동튜닝 cron
+<span class="val">exceptions.enabled</span>             = sql_exceptions 기능 활성
+<span class="val">global.hold_ttl_days</span>           = AI Queue 보류 자동 만료일
+<span class="val">global.query_timeout_sec</span>       = 전역 Oracle 쿼리 타임아웃 (sec)
+<span class="val">global.request_timeout_sec</span>     = 전역 HTTP 요청 타임아웃 (sec)
+<span class="val">global.result_match.enabled</span>    = 튜닝 결과셋 정합성 자동 검증
+<span class="val">queue.backpressure_at</span>          = pending 적체 임계 (초과 시 503)</div>
+</div>
+
+<!-- instances -->
+<div class="card gf">
+<div class="card-h" style="background:#d97706">instances — DB 인스턴스 등록 (32컬럼) <span class="badge b-new">신규</span><span class="badge b-ok">1 row</span></div>
+<div class="card-d">튜닝 대상 DB 접속 정보 + 풀·서킷브레이커·헬스체크 상태. db_instances 대체 완료 (2026-04-26).</div>
+<div class="note-box">
+<span class="nh">마이그레이션 완료</span><b>db_instances → instances 전환 완료 (2026-04-26)</b><br>
+<code>sql_texts.instance_id</code>·<code>tuning_requests.instance_id</code> 등 모든 FK가 <code>instances.instance_id</code> 를 참조하도록 재배선됨. 구 <code>db_instances</code> 는 <code>_bak_db_instances_20260424</code> 로 백업 후 제거.
+</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="pk">instance_id (PK)</td><td class="tp">BIGINT</td><td>인스턴스 ID</td></tr>
+<tr><td>name / alias_name / db_groupname</td><td class="tp">VARCHAR</td><td>이름 / 별칭 / 그룹명</td></tr>
+<tr><td>host / port / sid / service_name</td><td class="tp">VARCHAR, INTEGER</td><td>접속 정보</td></tr>
+<tr><td>db_type / db_version / os_type</td><td class="tp">VARCHAR</td><td>DB 종류·버전·OS</td></tr>
+<tr><td>username / password_encrypted / is_sysdba</td><td class="tp">VARCHAR, TEXT, BOOLEAN</td><td>접속 계정</td></tr>
+<tr><td>is_active</td><td class="tp">BOOLEAN</td><td>활성 여부</td></tr>
+<tr><td>pool_min / pool_max / pool_increment</td><td class="tp">INTEGER</td><td>커넥션 풀 크기</td></tr>
+<tr><td>pool_timeout_sec / pool_max_lifetime_sec</td><td class="tp">INTEGER</td><td>풀 타임아웃 (Sec)</td></tr>
+<tr><td>stmt_cache_size</td><td class="tp">INTEGER</td><td>Statement 캐시</td></tr>
+<tr><td>connect_timeout_sec / query_timeout_sec</td><td class="tp">INTEGER</td><td>접속·쿼리 타임아웃 (Sec)</td></tr>
+<tr><td>cb_failure_threshold / cb_cooldown_sec / cb_success_threshold</td><td class="tp">INTEGER</td><td>서킷브레이커 정책</td></tr>
+<tr><td>health_status / last_health_check_at / last_tested_at / last_error_message</td><td class="tp">VARCHAR, TIMESTAMPTZ, TEXT</td><td>헬스체크 상태</td></tr>
+<tr><td>created_at / updated_at</td><td class="tp">TIMESTAMPTZ</td><td>생성/수정 시각</td></tr>
+</table>
+<div class="sample"><span class="lbl">SELECT * FROM instances LIMIT 1;</span>
+<span class="val">instance_id</span>           = 1
+<span class="val">name</span>                  = REPO
+<span class="val">alias_name</span>            = 운영-REPO
+<span class="val">db_groupname</span>          = 미지정
+<span class="val">host</span>                  = 10.10.45.203
+<span class="val">port</span>                  = 1521
+<span class="val">sid</span>                   = REPO
+<span class="val">db_type</span>               = oracle
+<span class="val">username</span>              = system
+<span class="val">password_encrypted</span>    = [MIGRATION_PLACEHOLDER]
+<span class="val">is_sysdba</span>             = false
+<span class="val">is_active</span>             = true
+<span class="val">pool_min / pool_max</span>   = 1 / 4
+<span class="val">query_timeout_sec</span>     = 30
+<span class="val">health_status</span>         = active
+<span class="val">created_at</span>            = 2026-04-24 19:54:29+09</div>
+</div>
+
+</div>
+
+<h2 class="sec">요청 영역 — 상세 명세 + 샘플 데이터</h2>
+<div class="g2">
+
+<!-- tuning_request_group -->
+<div class="card">
+<div class="card-h" style="background:#4f46e5">tuning_request_group — 요청 그룹 (11컬럼) <span class="badge b-ok">24 rows</span></div>
+<div class="card-d">요청 묶음에 사용할 LLM 모델·요청 사용자를 group 단위로 저장. 단건·배치 모두 선행 적재 (단건 1:1, 배치 1:N).</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="pk">group_id (PK)</td><td class="tp">UUID</td><td>default gen_random_uuid()</td></tr>
+<tr><td>request_group_name</td><td class="tp">VARCHAR(128)</td><td>요청 그룹명</td></tr>
+<tr><td>alias</td><td class="tp">TEXT</td><td>별칭</td></tr>
+<tr><td class="fk">instance_id</td><td class="tp">BIGINT</td><td>→ instances.instance_id [FK]</td></tr>
+<tr><td>request_source</td><td class="tp">VARCHAR(16)</td><td>AWR / V$SQL / MG / DIRECT (CHECK)</td></tr>
+<tr><td>created_by</td><td class="tp">VARCHAR(64)</td><td>생성자</td></tr>
+<tr><td>created_at</td><td class="tp">TIMESTAMPTZ</td><td>생성 시각</td></tr>
+<tr><td>scheduled_at</td><td class="tp">TIMESTAMPTZ</td><td>예약 수행 시각</td></tr>
+<tr><td>request_count</td><td class="tp">INTEGER</td><td>default 0 (구 item_count 에서 개명)</td></tr>
+<tr><td class="fk">llm_id</td><td class="tp">INTEGER</td><td>→ llm_models.llm_id [FK]</td></tr>
+<tr><td class="fk">user_id</td><td class="tp">BIGINT</td><td>→ users.user_id [FK]</td></tr>
+</table>
+<div class="sample"><span class="lbl">SELECT * FROM tuning_request_group ORDER BY created_at DESC LIMIT 1;</span>
+<span class="val">group_id</span>           = 3b605844-51a5-4c82-93e0-e38bfbd4afb3
+<span class="val">request_group_name</span> = 메타동기-단건
+<span class="val">alias</span>              = SYNC_SINGLE
+<span class="val">instance_id</span>        = 1
+<span class="val">request_source</span>     = AWR
+<span class="val">created_by</span>         = system
+<span class="val">created_at</span>         = 2026-04-24 18:35:22+09
+<span class="val">scheduled_at</span>       = <span class="note">NULL</span>
+<span class="val">request_count</span>      = 1
+<span class="val">llm_id</span>             = <span class="note">NULL</span>
+<span class="val">user_id</span>            = <span class="note">NULL</span></div>
+</div>
+
+<!-- tuning_requests -->
+<div class="card">
+<div class="card-h" style="background:#2563eb">tuning_requests — 튜닝 요청 메인 (19컬럼) <span class="badge b-ok">26 rows</span></div>
+<div class="card-d">AS-IS → LLM → TO-BE 전체 과정 1건. 재시도 시 parent_request_id로 체이닝. LLM 모델·요청자는 group 경유 참조.</div>
+<div class="note-box">
+<span class="nh">v14</span><b>instance_id 타입 INTEGER → BIGINT 로 변경 (instances.instance_id BIGINT 매칭)</b>
+</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="pk">request_id (PK)</td><td class="tp">INTEGER</td><td>요청 ID</td></tr>
+<tr><td class="fk">instance_id</td><td class="tp">BIGINT</td><td>→ instances.instance_id [FK] (NOT NULL) <b style="color:#1e40af">(v14: INTEGER → BIGINT)</b></td></tr>
+<tr><td>parent_request_id</td><td class="tp">INTEGER</td><td>→ self (재시도 이전 건)</td></tr>
+<tr><td class="fk">asis_sql_id</td><td class="tp">VARCHAR</td><td>→ sql_texts.sql_id (AS-IS)</td></tr>
+<tr><td class="fk">tobe_sql_id</td><td class="tp">VARCHAR</td><td>→ sql_texts.sql_id (TO-BE)</td></tr>
+<tr><td>source</td><td class="tp">VARCHAR</td><td>ui / api / schedule (NOT NULL)</td></tr>
+<tr><td>status</td><td class="tp">VARCHAR</td><td>default 'requested'</td></tr>
+<tr><td>rationale</td><td class="tp">TEXT</td><td>LLM 튜닝 근거</td></tr>
+<tr><td>user_instruction</td><td class="tp">TEXT</td><td>사용자 지시사항</td></tr>
+<tr><td>alias</td><td class="tp">VARCHAR</td><td>요청 식별용 별칭</td></tr>
+<tr><td>requested_at</td><td class="tp">TIMESTAMPTZ</td><td>요청 시각 (NOT NULL, default now())</td></tr>
+<tr><td>completed_at</td><td class="tp">TIMESTAMPTZ</td><td>완료 시각</td></tr>
+<tr><td>latency_ms</td><td class="tp">INTEGER</td><td>LLM 응답 시간 — <b style="color:#0369a1">표시 단위 Sec(초), 환산 ÷1000</b></td></tr>
+<tr><td>schema_name</td><td class="tp">VARCHAR</td><td>요청 스키마 (sql_texts에서 이동)</td></tr>
+<tr><td>result_match</td><td class="tp">BOOLEAN</td><td>AS-IS/TO-BE 결과 일치 여부 (sql_performance에서 이동)</td></tr>
+<tr><td class="fk">group_id</td><td class="tp">UUID</td><td>→ tuning_request_group.group_id [FK] (NOT NULL)</td></tr>
+<tr><td>request_group_name</td><td class="tp">VARCHAR</td><td>group에서 중복 (1차 접근용)</td></tr>
+<tr><td>request_source</td><td class="tp">VARCHAR</td><td>group에서 중복</td></tr>
+<tr><td>scheduled_at</td><td class="tp">TIMESTAMPTZ</td><td>group에서 중복</td></tr>
+</table>
+<div class="card-d" style="background:#fef2f2;color:#991b1b;border-top:1px solid #fecaca">
+v12 대비 삭제: <code>user_id</code> / <code>llm_id</code> (tuning_request_group 으로 이동).<br>
+v11 이전 삭제분 포함: <code>llm_provider</code> / <code>llm_model</code> / <code>input_tokens</code> / <code>output_tokens</code>.
+</div>
+<div class="sample"><span class="lbl">SELECT request_id, instance_id, group_id, schema_name,
+       result_match, request_group_name, request_source, status, alias
+FROM tuning_requests ORDER BY request_id DESC LIMIT 1;</span>
+<span class="val">request_id</span>         = 167
+<span class="val">instance_id</span>        = 1
+<span class="val">group_id</span>           = 3b605844-51a5-4c82-93e0-e38bfbd4afb3
+<span class="val">schema_name</span>        = <span class="note">NULL</span>
+<span class="val">result_match</span>       = <span class="note">NULL</span>
+<span class="val">request_group_name</span> = 메타동기-단건
+<span class="val">request_source</span>     = AWR
+<span class="val">status</span>             = failed
+<span class="val">alias</span>              = SYNC_SINGLE</div>
+</div>
+
+<!-- sql_texts -->
+<div class="card">
+<div class="card-h" style="background:#16a34a">sql_texts — SQL 원문 저장소 (5컬럼) <span class="badge b-ok">82 rows</span></div>
+<div class="card-d">모든 SQL의 유일한 저장소. AS-IS/TO-BE 구분은 sql_type. schema_name 삭제 → tuning_requests로 이동.</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td>sql_id</td><td class="tp">VARCHAR</td><td>SQL 해시 (NOT NULL)</td></tr>
+<tr><td class="fk">instance_id</td><td class="tp">INTEGER</td><td>→ instances.instance_id [FK] (NOT NULL)</td></tr>
+<tr><td>sql_text</td><td class="tp">TEXT</td><td>SQL 원문 (NOT NULL)</td></tr>
+<tr><td>sql_type</td><td class="tp">VARCHAR</td><td>as_is / to_be (NOT NULL)</td></tr>
+<tr><td>created_at</td><td class="tp">TIMESTAMPTZ</td><td>등록 시각 (NOT NULL, default now())</td></tr>
+</table>
+<div class="card-d" style="background:#fef2f2;color:#991b1b;border-top:1px solid #fecaca">삭제된 컬럼 (v11 대비): <code>schema_name</code> (tuning_requests로 이동)</div>
+<div class="sample"><span class="lbl">SELECT sql_id, instance_id, sql_type, created_at
+FROM sql_texts ORDER BY created_at DESC LIMIT 1;</span>
+<span class="val">sql_id</span>      = 29ee295e93b0342186567d85bd04ca51
+<span class="val">instance_id</span> = 1
+<span class="val">sql_type</span>    = as_is
+<span class="val">created_at</span>  = 2026-04-24 18:35:22+09</div>
+</div>
+
+<!-- sql_performance -->
+<div class="card">
+<div class="card-h" style="background:#db2777">sql_performance — Before/After 성능 메트릭 (13컬럼) <span class="badge b-ok">64 rows</span></div>
+<div class="card-d">phase로 Before/After 구분. plan_hash 추가 → sql_plans 와 (instance_id + plan_hash) 논리 조인. result_match 는 tuning_requests 로 이동.</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="fk">request_id</td><td class="tp">INTEGER</td><td>→ tuning_requests.request_id (NOT NULL)</td></tr>
+<tr><td class="fk">instance_id</td><td class="tp">INTEGER</td><td>→ instances.instance_id (NOT NULL)</td></tr>
+<tr><td>sql_id</td><td class="tp">VARCHAR</td><td>→ sql_texts.sql_id</td></tr>
+<tr><td>phase</td><td class="tp">VARCHAR</td><td>before / after (NOT NULL)</td></tr>
+<tr><td>elapsed_time_sec</td><td class="tp">NUMERIC</td><td>수행 시간 <b style="color:#0369a1">단위: Sec(초)</b></td></tr>
+<tr><td>cpu_time_sec</td><td class="tp">NUMERIC</td><td>CPU 시간 <b style="color:#0369a1">단위: Sec(초)</b></td></tr>
+<tr><td>buffer_gets_count</td><td class="tp">BIGINT</td><td>논리적 I/O (Count)</td></tr>
+<tr><td>disk_reads_count</td><td class="tp">BIGINT</td><td>물리적 I/O (Count)</td></tr>
+<tr><td>executions_count</td><td class="tp">BIGINT</td><td>실행 횟수 (Count)</td></tr>
+<tr><td>rows_processed_count</td><td class="tp">BIGINT</td><td>처리 건수 (Count)</td></tr>
+<tr><td>captured_at</td><td class="tp">TIMESTAMPTZ</td><td>수집 시각 (NOT NULL, default now())</td></tr>
+<tr><td>is_estimated</td><td class="tp">CHAR(1)</td><td>추정값 여부 (NOT NULL, default 'N')</td></tr>
+<tr><td>plan_hash</td><td class="tp">VARCHAR</td><td>Plan hash — sql_plans 조인 키</td></tr>
+</table>
+<div class="card-d" style="background:#fef2f2;color:#991b1b;border-top:1px solid #fecaca">변경 (v11 대비): <code>result_match</code> 삭제 (→ tuning_requests BOOLEAN 으로 이동) · <code>plan_hash</code> 추가</div>
+</div>
+
+<!-- sql_plans -->
+<div class="card">
+<div class="card-h" style="background:#ca8a04">sql_plans — 실행계획 (7컬럼) <span class="badge b-ok">35 rows</span></div>
+<div class="card-d">DBMS_XPLAN.DISPLAY_CURSOR 결과. request_id 삭제 → plan 중복 저장 방지. 조인은 (instance_id + plan_hash).</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="fk">instance_id</td><td class="tp">INTEGER</td><td>→ instances.instance_id (NOT NULL)</td></tr>
+<tr><td>sql_id</td><td class="tp">VARCHAR</td><td>→ sql_texts.sql_id</td></tr>
+<tr><td>phase</td><td class="tp">VARCHAR</td><td>before / after (NOT NULL)</td></tr>
+<tr><td>plan_hash</td><td class="tp">VARCHAR</td><td>Plan hash value — sql_performance 조인 키</td></tr>
+<tr><td>plan_text</td><td class="tp">TEXT</td><td>실행계획 전문</td></tr>
+<tr><td>cost</td><td class="tp">INTEGER</td><td>옵티마이저 비용</td></tr>
+<tr><td>captured_at</td><td class="tp">TIMESTAMPTZ</td><td>수집 시각 (NOT NULL, default now())</td></tr>
+</table>
+<div class="card-d" style="background:#fef2f2;color:#991b1b;border-top:1px solid #fecaca">삭제된 컬럼 (v11 대비): <code>request_id</code> (plan 중복 저장 방지 — instance_id + plan_hash 논리 참조)</div>
+<div class="sample"><span class="lbl">SELECT instance_id, sql_id, phase, plan_hash, cost, captured_at
+FROM sql_plans ORDER BY captured_at DESC LIMIT 1;</span>
+<span class="val">instance_id</span> = 1
+<span class="val">sql_id</span>      = 29ee295e93b0342186567d85bd04ca51
+<span class="val">phase</span>       = before
+<span class="val">plan_hash</span>   = 1388734953
+<span class="val">cost</span>        = <span class="note">NULL</span>
+<span class="val">captured_at</span> = 2026-04-24 18:35:23+09</div>
+</div>
+
+<!-- sql_bind_variables -->
+<div class="card">
+<div class="card-h" style="background:#7c3aed">sql_bind_variables — 바인드 변수 (8컬럼) <span class="badge b-ok">20 rows</span></div>
+<div class="card-d">바인드 변수 이름/타입/샘플값. v11 대비 변경 없음. FK는 request_id → tuning_requests.</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td class="fk">request_id</td><td class="tp">INTEGER</td><td>→ tuning_requests.request_id [FK] (NOT NULL)</td></tr>
+<tr><td>sql_id</td><td class="tp">VARCHAR</td><td>SQL 해시 (NOT NULL)</td></tr>
+<tr><td class="fk">instance_id</td><td class="tp">INTEGER</td><td>→ instances.instance_id (NOT NULL)</td></tr>
+<tr><td>name</td><td class="tp">VARCHAR</td><td>변수명 (NOT NULL)</td></tr>
+<tr><td>position</td><td class="tp">INTEGER</td><td>바인드 위치 (NOT NULL)</td></tr>
+<tr><td>data_type</td><td class="tp">VARCHAR</td><td>NUMBER, VARCHAR2 등</td></tr>
+<tr><td>value</td><td class="tp">TEXT</td><td>샘플 값</td></tr>
+<tr><td>captured_at</td><td class="tp">TIMESTAMPTZ</td><td>수집 시각 (NOT NULL, default now())</td></tr>
+</table>
+</div>
+
+<!-- llm_call_log -->
+<div class="card gf">
+<div class="card-h" style="background:#475569">llm_call_log — LLM 호출 감사 로그 (14컬럼) <span class="badge b-ok">40 rows</span></div>
+<div class="card-d">모든 LLM 호출의 비용/성능/에러 기록. 토큰 사용량은 v12부터 여기에만 저장. v14 수정: log_id 삭제 + 기존 request_id FK 삭제 → log_id를 request_id(INTEGER, SERIAL)로 rename. PK 제약 없음(1:N 허용).</div>
+<table>
+<tr><th>컬럼</th><th>타입</th><th>설명</th></tr>
+<tr><td>request_id</td><td class="tp">INTEGER (SERIAL)</td><td>로그 순번 (구 log_id 에서 rename, PK 제약 없음)</td></tr>
+<tr><td class="fk">instance_id</td><td class="tp">INTEGER</td><td>→ instances.instance_id</td></tr>
+<tr><td>provider</td><td class="tp">VARCHAR</td><td>vllm / claude (NOT NULL)</td></tr>
+<tr><td>model</td><td class="tp">VARCHAR</td><td>axis-v1 등 (NOT NULL)</td></tr>
+<tr><td>sql_id</td><td class="tp">VARCHAR</td><td>대상 SQL 해시</td></tr>
+<tr><td>work_id</td><td class="tp">VARCHAR</td><td>워크 아이템 연결</td></tr>
+<tr><td>input_tokens / output_tokens</td><td class="tp">INTEGER</td><td>토큰 사용량 (NOT NULL)</td></tr>
+<tr><td>latency_ms</td><td class="tp">INTEGER</td><td>응답 시간 — <b style="color:#0369a1">표시 단위 Sec(초), 환산 ÷1000</b> (NOT NULL)</td></tr>
+<tr><td>status</td><td class="tp">VARCHAR</td><td>success / error (NOT NULL)</td></tr>
+<tr><td>error</td><td class="tp">TEXT</td><td>에러 메시지</td></tr>
+<tr><td>created_at</td><td class="tp">TIMESTAMPTZ</td><td>호출 시각 (NOT NULL, default now())</td></tr>
+<tr><td>cached_tokens / cache_creation_tokens</td><td class="tp">BIGINT</td><td>Claude 캐싱 토큰 (vLLM은 NULL)</td></tr>
+</table>
+<div class="card-d" style="background:#fef2f2;color:#991b1b;border-top:1px solid #fecaca">v14 변경 (2026-04-24): <code>log_id</code> (PK SERIAL) → <code>request_id</code> rename + PK 제약 제거 / 기존 <code>request_id</code> (FK → tuning_requests) 컬럼 삭제. 총 15 → 14컬럼.</div>
+</div>
+
+</div>
+
+<!-- JOIN 예시 -->
+<h2 class="sec">주요 JOIN 패턴 (v14 구조 기준)</h2>
+<div class="card gf" style="max-width:1200px;margin:0 auto">
+<div class="card-h" style="background:#1e3a5f">group_id / llm_id / plan_hash 기반 JOIN 예시</div>
+<div class="sample"><span class="lbl">-- 1. 요청 그룹 + 소속 요청 + LLM 모델 + 요청자 (llm/user 는 group 기준)</span>
+SELECT g.request_group_name, g.request_source, g.request_count,
+       r.request_id, r.status, r.alias,
+       m.provider, m.model_name,
+       u.email, u.name
+FROM tuning_request_group g
+JOIN tuning_requests r ON r.group_id = g.group_id
+LEFT JOIN llm_models m ON m.llm_id = g.llm_id
+LEFT JOIN users     u ON u.user_id = g.user_id
+WHERE g.instance_id = 1
+ORDER BY g.created_at DESC, r.request_id;
+
+<span class="lbl">-- 2. 성능 ↔ 실행계획 논리 조인 (instance_id + plan_hash)</span>
+SELECT p.request_id, p.phase,
+       p.elapsed_time_sec, p.buffer_gets_count,
+       pl.plan_hash, pl.cost
+FROM sql_performance p
+LEFT JOIN sql_plans pl
+       ON pl.instance_id = p.instance_id
+      AND pl.plan_hash   = p.plan_hash
+      AND pl.phase       = p.phase
+WHERE p.request_id = 167;
+
+<span class="lbl">-- 3. Before vs After 성능 비교 (개선율) — latency 단위 Sec</span>
+SELECT
+  MAX(CASE WHEN phase='before' THEN elapsed_time_sec END) AS before_sec,
+  MAX(CASE WHEN phase='after'  THEN elapsed_time_sec END) AS after_sec,
+  ROUND(
+    (MAX(CASE WHEN phase='before' THEN elapsed_time_sec END)
+     - MAX(CASE WHEN phase='after' THEN elapsed_time_sec END))
+    / NULLIF(MAX(CASE WHEN phase='before' THEN elapsed_time_sec END),0) * 100
+  , 2) AS improvement_pct
+FROM sql_performance
+WHERE request_id = 66 AND instance_id = 1;
+
+<span class="lbl">-- 4. 사용자 + 권한그룹 + 튜닝 통계 (user_id 는 group 기준 집계)</span>
+SELECT u.email, u.name, ag.group_name,
+       COUNT(r.request_id)                                   AS total_cnt,
+       SUM(CASE WHEN r.status='completed' THEN 1 ELSE 0 END) AS success_cnt,
+       ROUND(AVG(r.latency_ms)::numeric / 1000, 3)           AS avg_latency_sec
+FROM users u
+JOIN groups ag            ON ag.group_id = u.group_id
+LEFT JOIN tuning_request_group g ON g.user_id   = u.user_id
+LEFT JOIN tuning_requests r      ON r.group_id  = g.group_id
+GROUP BY u.user_id, u.email, u.name, ag.group_name
+ORDER BY total_cnt DESC;
+
+<span class="lbl">-- 5. LLM 모델별 비용·호출 집계 (llm_models 기준)</span>
+SELECT m.provider, m.model_name,
+       COUNT(l.request_id)                            AS call_cnt,
+       SUM(l.input_tokens + l.output_tokens)          AS total_tokens,
+       ROUND(AVG(l.latency_ms)::numeric / 1000, 3)    AS avg_latency_sec
+FROM llm_models m
+LEFT JOIN llm_call_log l ON l.provider = m.provider AND l.model = m.model_name
+GROUP BY m.llm_id, m.provider, m.model_name
+ORDER BY call_cnt DESC;
+
+<span class="lbl">-- 6. 요청 + AS-IS SQL + schema_name (schema_name 은 tuning_requests 로 이동)</span>
+SELECT r.request_id, r.schema_name, r.result_match,
+       s.sql_text AS asis_sql
+FROM tuning_requests r
+JOIN sql_texts s ON s.sql_id     = r.asis_sql_id
+                AND s.instance_id = r.instance_id
+                AND s.sql_type    = 'as_is'
+WHERE r.instance_id = 1
+ORDER BY r.request_id DESC;
+
+<span class="lbl">-- 7. 정책 조회 (JSONB value 추출)</span>
+SELECT key, value, description
+FROM policy_settings
+WHERE key LIKE 'global.%'
+ORDER BY key;
+
+<span class="lbl">-- 8. 바인드 변수 포함 AS-IS SQL 전체 컨텍스트</span>
+SELECT r.request_id,
+       s.sql_text,
+       b.name AS bind_name, b.data_type, b.value, b.position
+FROM tuning_requests r
+JOIN sql_texts            s ON s.sql_id      = r.asis_sql_id
+                           AND s.instance_id = r.instance_id
+                           AND s.sql_type    = 'as_is'
+LEFT JOIN sql_bind_variables b ON b.request_id  = r.request_id
+                              AND b.instance_id = r.instance_id
+                              AND b.sql_id      = r.asis_sql_id
+WHERE r.request_id = 167
+ORDER BY b.position;
+
+<span class="lbl">-- 9. (v14) legacy_console_id 기반 구 console_users 매핑 확인</span>
+SELECT user_id, email, name, legacy_console_id
+FROM users
+WHERE legacy_console_id IS NOT NULL
+ORDER BY user_id;</div>
+</div>
+
+</body>
+</html>

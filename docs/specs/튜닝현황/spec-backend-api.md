@@ -94,9 +94,16 @@
 | improvement_pct | float \| null | 백엔드 산출 개선률 로직) |
 | schema_name | string \| null | 실행 스키마 (구 `sql_texts.schema_name` · 이제 `tuning_requests` 컬럼) |
 | result_match | string \| null | 결과셋 일치 (구 `sql_performance.result_match` · 이제 `tuning_requests` 컬럼. 현재 NULL 고정) |
-| llm_provider / llm_model | string \| null | `llm_models` JOIN 결과 (`tuning_requests.llm_id` FK 경유) |
-| input_tokens / output_tokens | int \| null | **DB 컬럼 DROP. 응답에는 키는 유지하되 항상 NULL**. 프런트 하위호환용 |
+| llm_provider / llm_model | string \| null | `llm_models` JOIN 결과 (`tuning_request_group.llm_id` FK 경유) |
+| input_tokens / output_tokens | int \| null | DB 컬럼 DROP. 응답에는 키는 유지하되 항상 NULL. 프런트 하위호환용 |
 | latency_ms | int \| null | Millisecond |
+| group_id | uuid | 요청 그룹 식별자 |
+| request_group_name | string \| null | 그룹명 (default `[방식] 유저명 요청 N건 YYMMDD HH:MM:SS`) |
+| request_source | string \| null | 그룹 출처 (`V$SQL` / `AWR` / `DIRECT` / `RETUNE` 등) |
+| group_request_count | int | 그룹 내 request 총 수 |
+| group_scheduled_at | timestamptz \| null | 그룹 예약 시각 |
+| group_created_at | timestamptz | 그룹 생성 시각 |
+| is_estimated | string \| null | `Y`/`N` (sql_performance.is_estimated of after phase) |
 
 **3. 동작**
 - a. 기본 정렬: requested_at DESC
@@ -160,7 +167,62 @@ plans[] item:
 
 ---
 
-### (4) POST /api/tuning/requests/delete — 일괄 삭제
+### (4) POST /api/tuning/requests/batch — 단건/일괄 통합 요청 생성
+
+**1. 내용**
+- 단건/일괄을 통합한 신규 엔드포인트. **1 트랜잭션 안에서 1 group + N requests 를 일괄 INSERT**. 단건도 `items.length=1` 로 통합 호출.
+- 재튜닝(`parent_request_id` 포함 item)은 **parent 의 group_id 를 그대로 승계** — 신규 group 생성하지 않고 parent group 의 `request_count` +=1.
+
+**2. 구성**
+
+요청 body:
+```json
+{
+  "batch_meta": {
+    "request_group_name": "[V$SQL] admin 요청 3건 260426 14:25:32",
+    "request_source": "DIRECT",
+    "instance_id": 1,
+    "scheduled_at": null,
+    "user_id": null
+  },
+  "items": [
+    {
+      "sql_text": "...",
+      "schema_name": "SALES",
+      "binds": [{"name":":B1","value":"1","data_type":"NUMBER","position":1}],
+      "alias": "V$SQL",
+      "parent_request_id": null,
+      "user_instruction": null,
+      "auto_tune": true
+    }
+  ]
+}
+```
+
+응답:
+```json
+{
+  "group_id": "uuid",
+  "request_count": 3,
+  "requests": [
+    { "request_id": 175, "status": "requested", "asis_sql_id": "...", "alias": "V$SQL" }
+  ]
+}
+```
+
+**3. 동작**
+- a. items 순회 — `parent_request_id` 있으면 parent.group_id 조회 → 승계, group INSERT skip / 없으면 batch_meta 로 신규 group INSERT (한 batch 안 신규 item 들은 같은 신규 group 공유)
+- b. 각 item: sql_texts UPSERT → tuning_requests INSERT (동일 group_id, request_id 채번) → sql_bind_variables INSERT
+- c. COMMIT 후 비동기 `run_tuning_job(request_id)` N 번 실행 — 각 request 독립, 일부 실패해도 다른 request 영향 없음
+- d. 어떤 item INSERT 실패 시 전체 ROLLBACK
+- e. mixed 케이스: batch 안에 parent 가진 item + 신규 item 혼재 시 — parent 가진 item 은 parent group, 신규 item 은 batch 신규 group 으로 분리 (request_count 도 분리 집계)
+
+**4. instance_id 자리**
+- **숫자(int) 만 허용**. 문자열 (예: `"REPO"`) 보내면 422. 프런트는 `WorkItem.instanceId` (number) 필드 사용
+
+---
+
+### (5) POST /api/tuning/requests/delete — 일괄 삭제
 
 **1. 내용**
 - 복수 요청을 일괄 삭제한다. 자식의 parent_request_id 를 먼저 NULL 처리해 orphan 방지.
